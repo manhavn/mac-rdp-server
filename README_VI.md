@@ -43,58 +43,54 @@ Dự án **Mac RDP Server** hiệu năng cao được viết bằng ngôn ngữ 
 
 ### 4. Khởi chạy & Quản lý Server:
 
-#### Chạy ngầm (Chế độ Daemon):
+#### Khởi chạy bằng Tham số Dòng lệnh CLI (Khuyên dùng):
 ```bash
-RDP_USER=dev RDP_PASSWORD=12345678 ./target/release/mac-rdp-server --daemon
-```
+# Chạy ngầm trong nền (Daemon Mode):
+./target/release/mac-rdp-server -u dev -p 12345678 -d
 
-#### Chạy ngầm không ghi log (--no-log):
-```bash
-RDP_USER=dev RDP_PASSWORD=12345678 ./target/release/mac-rdp-server --daemon --no-log
-```
+# Chạy ngầm hoàn toàn không ghi log (--no-log):
+./target/release/mac-rdp-server -u dev -p 12345678 -d --no-log
 
-#### Kiểm tra trạng thái hoạt động:
-```bash
+# Kiểm tra trạng thái hoạt động:
 ./target/release/mac-rdp-server --status
-```
 
-#### Dừng Server chạy ngầm:
-```bash
+# Dừng Server đang chạy ngầm:
 ./target/release/mac-rdp-server --quit
-```
 
-#### Chạy trực tiếp (Interactive Foreground):
-```bash
-RDP_USER=dev RDP_PASSWORD=12345678 cargo run --release
+# Chạy trực tiếp (Interactive Foreground):
+./target/release/mac-rdp-server -u dev -p 12345678
 ```
-
-Server sẽ tự động kích hoạt cấu hình tối ưu:
-- Lưới ô gạch: `320x24`
-- Độ sâu màu: `6bit` (0xFC mask)
-- Tốc độ chụp: `60 FPS`
-- Điều tiết động: $60\text{ FPS}$ (chuột) $\rightarrow 1\text{ FPS}$ (toàn màn hình)
 
 ---
 
-## 💡 Tùy biến qua biến môi trường
+## 💡 Bảng Tham số Dòng lệnh & Biến môi trường
 
-| Biến môi trường | Giá trị hỗ trợ | Mặc định | Mô tả |
-| :--- | :--- | :--- | :--- |
-| `RDP_COLOR` (hoặc `RDP_BITS`) | `4bit`, `5bit`, `6bit`, `8bit` | `6bit` | Mức nén & độ sâu màu (4bit: siêu nhẹ, 6bit: sắc nét, 8bit: lossless) |
-| `RDP_TILE` | `320x24`, `320x32`, `240x24` | `320x24` | Kích thước ô gạch truyền tải |
-| `RDP_FPS` | `30`, `60`, `120` | `60` | Tần số chụp màn hình tối đa cho chuột & bàn phím |
-| `RDP_RES` | `native`, `1080p`, `720p` | `native` | Độ phân giải hiển thị RDP (`720p` giúp siêu nhẹ đường truyền) |
-| `RDP_MODE` | `speed`, `balanced`, `quality` | `speed` | Profile cấu hình tổng thể |
-| `RDP_USER` | Chuỗi tùy ý | `admin` | Tên đăng nhập RDP |
-| `RDP_PASSWORD` | Chuỗi tùy ý | `password123` | Mật khẩu đăng nhập RDP |
+Bạn có thể truyền cấu hình trực tiếp qua **tham số dòng lệnh CLI** (khuyên dùng) hoặc qua **biến môi trường**:
+
+| Tham số CLI | Biến môi trường | Giá trị hỗ trợ | Mặc định | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `-u`, `--user` | `RDP_USER` | Chuỗi tùy ý | `dev` | Tên đăng nhập RDP |
+| `-p`, `--password` | `RDP_PASSWORD` | Chuỗi tùy ý | `12345678` | Mật khẩu đăng nhập RDP |
+| `-P`, `--port` | `RDP_PORT` | `1..65535` | `3389` | Cổng TCP lắng nghe |
+| `-H`, `--host` | `RDP_HOST` | Địa chỉ IP | `0.0.0.0` | Địa chỉ mạng lắng nghe |
+| `-c`, `--color` | `RDP_COLOR` | `4bit`, `5bit`, `6bit`, `8bit` | `6bit` | Mức nén & độ sâu màu (4bit: siêu nhẹ, 6bit: sắc nét, 8bit: lossless) |
+| `-t`, `--tile` | `RDP_TILE` | `320x24`, `320x32`, `240x24` | `320x24` | Kích thước ô gạch truyền tải |
+| `-f`, `--fps` | `RDP_FPS` | `30`, `60`, `120` | `60` | Tần số quét màn hình tối đa cho chuột & bàn phím |
+| `-r`, `--res` | `RDP_RES` | `native`, `1080p`, `720p` | `native` | Độ phân giải hiển thị RDP (`720p` giúp siêu nhẹ) |
+| `-m`, `--mode` | `RDP_MODE` | `speed`, `balanced`, `quality` | `speed` | Profile cấu hình tổng thể |
+| `-d`, `--daemon` | - | Cờ bật | - | Chạy server ngầm trong nền |
+| `-q`, `--quit` | - | Cờ bật | - | Dừng server đang chạy ngầm |
+| `-s`, `--status` | - | Cờ bật | - | Kiểm tra trạng thái hoạt động của server |
+| `-nl`, `--no-log` | `RDP_NO_LOG` | Cờ bật / `1` | - | Tắt toàn bộ log xuất ra màn hình và file log |
+| `-h`, `--help` | - | Cờ bật | - | Xem menu hướng dẫn trợ giúp |
 
 #### Ví dụ tùy biến:
 ```bash
-# Chế độ siêu tốc tối đa (4-bit màu, ô gạch 320x32):
-RDP_COLOR=4bit RDP_TILE=320x32 RDP_USER=dev RDP_PASSWORD=12345678 cargo run --release
+# Chế độ siêu tốc tối đa (4-bit màu, ô gạch 320x32, 60 FPS chạy ngầm):
+./target/release/mac-rdp-server -u dev -p 12345678 -c 4bit -t 320x32 -f 60 -d
 
 # Chế độ True Color Lossless (8-bit màu):
-RDP_COLOR=8bit RDP_USER=dev RDP_PASSWORD=12345678 cargo run --release
+./target/release/mac-rdp-server -u dev -p 12345678 -c 8bit -d
 ```
 
 ---

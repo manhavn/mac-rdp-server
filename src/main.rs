@@ -167,13 +167,191 @@ fn handle_quit() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct CliConfig {
+    user: String,
+    password: String,
+    port: u16,
+    host: String,
+    color: String,
+    tile: String,
+    fps: u32,
+    res: String,
+    mode: String,
+    no_log: bool,
+    daemon: bool,
+    quit: bool,
+    status: bool,
+    help: bool,
+}
+
+fn print_help() {
+    println!("Mac RDP Server - High-Performance Remote Desktop for macOS");
+    println!();
+    println!("USAGE:");
+    println!("  mac-rdp-server [OPTIONS]");
+    println!();
+    println!("OPTIONS:");
+    println!("  -u, --user <USERNAME>       Set RDP auth username [default: dev]");
+    println!("  -p, --password <PASSWORD>   Set RDP auth password [default: 12345678]");
+    println!("  -P, --port <PORT>           Set listening port [default: 3389]");
+    println!("  -H, --host <HOST>           Set listening host IP [default: 0.0.0.0]");
+    println!("  -c, --color <DEPTH>         Color depth: 4bit, 5bit, 6bit, 8bit [default: 6bit]");
+    println!(
+        "  -t, --tile <WIDTHxHEIGHT>   Tile grid size: 320x24, 320x32, etc. [default: 320x24]"
+    );
+    println!("  -f, --fps <FPS>             Maximum capture FPS [default: 60]");
+    println!("  -r, --res <RES>             Resolution: native, 1080p, 720p [default: native]");
+    println!(
+        "  -m, --mode <MODE>           Profile preset: speed, quality, balanced [default: speed]"
+    );
+    println!("  -d, --daemon                Run server in background (daemon mode)");
+    println!("  -q, --quit                  Stop running background server");
+    println!("  -s, --status                Check background server status");
+    println!("  -nl, --no-log               Disable server logging (quiet mode)");
+    println!("  -h, --help                  Print this help menu");
+    println!();
+    println!("EXAMPLES:");
+    println!("  mac-rdp-server --user dev --password 12345678");
+    println!("  mac-rdp-server -u dev -p 12345678 -d");
+    println!("  mac-rdp-server -u dev -p 12345678 -c 4bit -t 320x32 -f 60 -d");
+    println!("  mac-rdp-server --quit");
+}
+
+fn parse_cli_args() -> CliConfig {
+    let args: Vec<String> = std::env::args().collect();
+    let mut user = std::env::var("RDP_USER").unwrap_or_else(|_| "dev".to_string());
+    let mut password = std::env::var("RDP_PASSWORD").unwrap_or_else(|_| "12345678".to_string());
+    let mut port: u16 = std::env::var("RDP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(3389);
+    let mut host = std::env::var("RDP_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let mut color = std::env::var("RDP_COLOR")
+        .or_else(|_| std::env::var("RDP_BITS"))
+        .unwrap_or_else(|_| "6bit".to_string());
+    let mut tile = std::env::var("RDP_TILE").unwrap_or_else(|_| "320x24".to_string());
+    let mut fps: u32 = std::env::var("RDP_FPS")
+        .ok()
+        .and_then(|f| f.parse().ok())
+        .unwrap_or(60);
+    let mut res = std::env::var("RDP_RES").unwrap_or_else(|_| "native".to_string());
+    let mut mode = std::env::var("RDP_MODE").unwrap_or_else(|_| "speed".to_string());
+    let mut no_log = std::env::var("RDP_NO_LOG")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let mut daemon = false;
+    let mut quit = false;
+    let mut status = false;
+    let mut help = false;
+
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+        match arg.as_str() {
+            "-u" | "--user" | "--username" => {
+                if i + 1 < args.len() {
+                    user = args[i + 1].clone();
+                    i += 1;
+                }
+            }
+            "-p" | "--password" | "--pass" => {
+                if i + 1 < args.len() {
+                    password = args[i + 1].clone();
+                    i += 1;
+                }
+            }
+            "-P" | "--port" => {
+                if i + 1 < args.len() {
+                    if let Ok(val) = args[i + 1].parse() {
+                        port = val;
+                    }
+                    i += 1;
+                }
+            }
+            "-H" | "--host" => {
+                if i + 1 < args.len() {
+                    host = args[i + 1].clone();
+                    i += 1;
+                }
+            }
+            "-c" | "--color" | "--bits" => {
+                if i + 1 < args.len() {
+                    color = args[i + 1].clone();
+                    i += 1;
+                }
+            }
+            "-t" | "--tile" => {
+                if i + 1 < args.len() {
+                    tile = args[i + 1].clone();
+                    i += 1;
+                }
+            }
+            "-f" | "--fps" => {
+                if i + 1 < args.len() {
+                    if let Ok(val) = args[i + 1].parse() {
+                        fps = val;
+                    }
+                    i += 1;
+                }
+            }
+            "-r" | "--res" | "--resolution" => {
+                if i + 1 < args.len() {
+                    res = args[i + 1].clone();
+                    i += 1;
+                }
+            }
+            "-m" | "--mode" => {
+                if i + 1 < args.len() {
+                    mode = args[i + 1].clone();
+                    i += 1;
+                }
+            }
+            "-d" | "--daemon" | "start" => {
+                daemon = true;
+            }
+            "-q" | "--quit" | "stop" => {
+                quit = true;
+            }
+            "-s" | "--status" | "status" => {
+                status = true;
+            }
+            "-nl" | "--no-log" => {
+                no_log = true;
+            }
+            "-h" | "--help" | "help" => {
+                help = true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    CliConfig {
+        user,
+        password,
+        port,
+        host,
+        color,
+        tile,
+        fps,
+        res,
+        mode,
+        no_log,
+        daemon,
+        quit,
+        status,
+        help,
+    }
+}
+
 /// Khởi động Server chạy ngầm dưới dạng Daemon (--daemon)
-fn handle_daemon(no_log: bool) -> Result<()> {
+fn handle_daemon(cli: &CliConfig) -> Result<()> {
     if let Ok(pid_str) = std::fs::read_to_string(PID_FILE) {
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
             if is_process_running(pid) {
                 println!("⚠️ Mac RDP Server is already running (PID: {}).", pid);
-                if !no_log {
+                if !cli.no_log {
                     println!("📄 Logs: {}", LOG_FILE);
                 }
                 println!("🛑 To stop server, run: ./mac-rdp-server --quit");
@@ -185,7 +363,17 @@ fn handle_daemon(no_log: bool) -> Result<()> {
     let current_exe = std::env::current_exe().context("Failed to get current executable path")?;
     let mut cmd = std::process::Command::new(current_exe);
     cmd.arg("--worker");
-    if no_log {
+    cmd.arg("-u").arg(&cli.user);
+    cmd.arg("-p").arg(&cli.password);
+    cmd.arg("-P").arg(cli.port.to_string());
+    cmd.arg("-H").arg(&cli.host);
+    cmd.arg("-c").arg(&cli.color);
+    cmd.arg("-t").arg(&cli.tile);
+    cmd.arg("-f").arg(cli.fps.to_string());
+    cmd.arg("-r").arg(&cli.res);
+    cmd.arg("-m").arg(&cli.mode);
+
+    if cli.no_log {
         cmd.arg("--no-log");
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::null());
@@ -209,9 +397,13 @@ fn handle_daemon(no_log: bool) -> Result<()> {
 
     println!("============================================================");
     println!("🚀 Mac RDP Server started in background (Daemon Mode)");
-    println!("📡 Listening on: 0.0.0.0:3389");
+    println!("📡 Listening on: {}:{}", cli.host, cli.port);
+    println!("🔑 Auth User: {}", cli.user);
+    println!("🎨 Color Depth: {}", cli.color);
+    println!("🧩 Tile Grid: {}", cli.tile);
+    println!("⚡ FPS: {}", cli.fps);
     println!("🆔 PID: {}", pid);
-    if no_log {
+    if cli.no_log {
         println!("📄 Log file: DISABLED (--no-log)");
     } else {
         println!("📄 Log file: {}", LOG_FILE);
@@ -244,30 +436,35 @@ fn handle_status() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let no_log = args.iter().any(|arg| arg == "--no-log" || arg == "-nl")
-        || std::env::var("RDP_NO_LOG")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+    let cli = parse_cli_args();
 
-    // Xử lý tham số dòng lệnh CLI
-    if args
-        .iter()
-        .any(|arg| arg == "--quit" || arg == "-q" || arg == "stop")
-    {
+    if cli.help {
+        print_help();
+        return Ok(());
+    }
+
+    // Xử lý tham số quản lý tiến trình
+    if cli.quit {
         return handle_quit();
     }
-    if args
-        .iter()
-        .any(|arg| arg == "--daemon" || arg == "-d" || arg == "start")
-    {
-        return handle_daemon(no_log);
+    if cli.daemon {
+        return handle_daemon(&cli);
     }
-    if args
-        .iter()
-        .any(|arg| arg == "--status" || arg == "-s" || arg == "status")
-    {
+    if cli.status {
         return handle_status();
+    }
+
+    // Đẩy cấu hình vào biến môi trường để các module và crate phụ thuộc nhận chính xác
+    unsafe {
+        std::env::set_var("RDP_USER", &cli.user);
+        std::env::set_var("RDP_PASSWORD", &cli.password);
+        std::env::set_var("RDP_HOST", &cli.host);
+        std::env::set_var("RDP_PORT", cli.port.to_string());
+        std::env::set_var("RDP_COLOR", &cli.color);
+        std::env::set_var("RDP_TILE", &cli.tile);
+        std::env::set_var("RDP_FPS", cli.fps.to_string());
+        std::env::set_var("RDP_RES", &cli.res);
+        std::env::set_var("RDP_MODE", &cli.mode);
     }
 
     // Ghi PID vào PID_FILE
@@ -275,7 +472,7 @@ async fn main() -> Result<()> {
     let _ = std::fs::write(PID_FILE, my_pid.to_string());
 
     // Khởi tạo logger (tắt hoàn toàn khi có cờ --no-log)
-    if no_log {
+    if cli.no_log {
         tracing_subscriber::fmt().with_env_filter("off").init();
     } else {
         tracing_subscriber::fmt()
@@ -287,44 +484,38 @@ async fn main() -> Result<()> {
             .init();
     }
 
-    let host = "0.0.0.0";
-    let port = 3389;
-    let bind_addr: SocketAddr = format!("{}:{}", host, port).parse()?;
-
-    // Cấu hình tài khoản đăng nhập (Username & Password)
-    let username = std::env::var("RDP_USER").unwrap_or_else(|_| "admin".to_string());
-    let password = std::env::var("RDP_PASSWORD").unwrap_or_else(|_| "password123".to_string());
-
-    let mode = std::env::var("RDP_MODE").unwrap_or_else(|_| "speed".to_string());
-    let tile_custom = std::env::var("RDP_TILE").unwrap_or_else(|_| "320x24 (Default)".to_string());
-    let color_custom = std::env::var("RDP_COLOR")
-        .or_else(|_| std::env::var("RDP_BITS"))
-        .unwrap_or_else(|_| "6bit (Default)".to_string());
+    let bind_addr: SocketAddr = format!("{}:{}", cli.host, cli.port).parse()?;
 
     info!("============================================================");
     info!("🚀 MAC RDP SERVER (High-Speed & Low-Latency Remote)");
-    info!("📡 Listening on: {}:{}", host, port);
-    info!("🔑 Auth Username: {}", username);
-    info!("🔑 Auth Password: {}", password);
+    info!("📡 Listening on: {}:{}", cli.host, cli.port);
+    info!("🔑 Auth Username: {}", cli.user);
+    info!("🔑 Auth Password: {}", cli.password);
     info!(
-        "⚡ Active Profile: {} (Tùy biến qua RDP_MODE=speed / quality / balanced)",
-        mode
+        "⚡ Active Profile: {} (Tùy biến qua -m / --mode speed / quality / balanced)",
+        cli.mode
     );
     info!(
-        "🎨 Active Color Depth: {} (Tùy biến qua RDP_COLOR=4bit / 5bit / 6bit / 8bit)",
-        color_custom
+        "🎨 Active Color Depth: {} (Tùy biến qua -c / --color 4bit / 5bit / 6bit / 8bit)",
+        cli.color
     );
     info!(
-        "🧩 Active Tile Grid: {} (Tùy biến qua RDP_TILE=320x24 hoặc 320x32)",
-        tile_custom
+        "🧩 Active Tile Grid: {} (Tùy biến qua -t / --tile 320x24 hoặc 320x32)",
+        cli.tile
     );
     info!(
         "🚀 Adaptive Motion Controller: ENABLED (Vi mô: 60 FPS, 10%: 30 FPS, 20%: 20 FPS, 30%: 10 FPS, 50%: 2 FPS/0.3s, >70%: 1 FPS/0.5s)"
     );
     info!("💡 Cấu hình mặc định tối ưu:");
-    info!("   - RDP_TILE=320x24 (Lưới ô gạch siêu tối ưu)");
-    info!("   - RDP_COLOR=6bit (Nén lượng tử 6-bit sắc nét, mượt mà)");
-    info!("   - RDP_FPS=60 (Chụp liên tục 60 FPS để chuột & gõ phím mượt 100%)");
+    info!("   - Lưới ô gạch: {} (Lưới ô gạch siêu tối ưu)", cli.tile);
+    info!(
+        "   - Mức nén màu: {} (Nén lượng tử 6-bit sắc nét, mượt mà)",
+        cli.color
+    );
+    info!(
+        "   - Tần số quét: {} FPS (Chụp liên tục 60 FPS để chuột & gõ phím mượt 100%)",
+        cli.fps
+    );
     info!("============================================================");
 
     // Kiểm tra quyền Accessibility & Screen Recording
@@ -341,8 +532,8 @@ async fn main() -> Result<()> {
 
     // Cấu hình Credential Validator
     let credentials = Credentials {
-        username,
-        password,
+        username: cli.user,
+        password: cli.password,
         domain: None,
     };
     let validator = Arc::new(ExactMatchCredentialValidator::new(credentials));

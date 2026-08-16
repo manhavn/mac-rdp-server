@@ -43,58 +43,54 @@ A high-performance **RDP (Remote Desktop Protocol) Server** written in **Rust** 
 
 ### 4. Launching & Managing the Server:
 
-#### Start in Background (Daemon Mode):
+#### Start with CLI Flags (Recommended):
 ```bash
-RDP_USER=dev RDP_PASSWORD=12345678 ./target/release/mac-rdp-server --daemon
-```
+# Start in background (Daemon Mode):
+./target/release/mac-rdp-server -u dev -p 12345678 -d
 
-#### Start in Background without Logs (--no-log):
-```bash
-RDP_USER=dev RDP_PASSWORD=12345678 ./target/release/mac-rdp-server --daemon --no-log
-```
+# Start in background without logs (--no-log):
+./target/release/mac-rdp-server -u dev -p 12345678 -d --no-log
 
-#### Check Server Status:
-```bash
+# Check status:
 ./target/release/mac-rdp-server --status
-```
 
-#### Stop Background Server:
-```bash
+# Stop background server:
 ./target/release/mac-rdp-server --quit
-```
 
-#### Run in Foreground (Interactive Mode):
-```bash
-RDP_USER=dev RDP_PASSWORD=12345678 cargo run --release
+# Run in foreground (interactive):
+./target/release/mac-rdp-server -u dev -p 12345678
 ```
-
-The server automatically runs with optimal defaults:
-- **Tile Grid:** `320x24`
-- **Color Depth:** `6bit` (`0xFC` mask)
-- **Capture Rate:** `60 FPS`
-- **Adaptive Motion Controller:** Enabled ($60\text{ FPS}$ micro $\rightarrow 1\text{ FPS}$ full-screen)
 
 ---
 
-## 💡 Environment Variables
+## 💡 CLI Options & Configuration
 
-| Variable | Supported Values | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `RDP_COLOR` / `RDP_BITS` | `4bit`, `5bit`, `6bit`, `8bit` | `6bit` | Compression & color depth (4bit: maximum throughput, 6bit: crisp UI, 8bit: lossless true color) |
-| `RDP_TILE` | `320x24`, `320x32`, `240x24` | `320x24` | Transmission tile grid dimensions |
-| `RDP_FPS` | `30`, `60`, `120` | `60` | Maximum capture and mouse sampling FPS |
-| `RDP_RES` | `native`, `1080p`, `720p` | `native` | Output canvas resolution (`720p` for ultra-low bandwidth) |
-| `RDP_MODE` | `speed`, `balanced`, `quality` | `speed` | Overall performance profile preset |
-| `RDP_USER` | Any string | `admin` | Authentication username |
-| `RDP_PASSWORD` | Any string | `password123` | Authentication password |
+You can configure the server using either **trailing CLI options** (recommended) or **environment variables**:
+
+| CLI Option | Environment Variable | Supported Values | Default | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `-u`, `--user` | `RDP_USER` | Any string | `dev` | Authentication username |
+| `-p`, `--password` | `RDP_PASSWORD` | Any string | `12345678` | Authentication password |
+| `-P`, `--port` | `RDP_PORT` | `1..65535` | `3389` | Listening TCP port |
+| `-H`, `--host` | `RDP_HOST` | IPv4 address | `0.0.0.0` | Listening host interface |
+| `-c`, `--color` | `RDP_COLOR` | `4bit`, `5bit`, `6bit`, `8bit` | `6bit` | Color depth (4bit: max throughput, 6bit: crisp UI, 8bit: lossless) |
+| `-t`, `--tile` | `RDP_TILE` | `320x24`, `320x32`, `240x24` | `320x24` | Tile grid transmission dimensions |
+| `-f`, `--fps` | `RDP_FPS` | `30`, `60`, `120` | `60` | Maximum capture and mouse sampling FPS |
+| `-r`, `--res` | `RDP_RES` | `native`, `1080p`, `720p` | `native` | Output canvas resolution (`720p` for ultra-low bandwidth) |
+| `-m`, `--mode` | `RDP_MODE` | `speed`, `balanced`, `quality` | `speed` | Performance profile preset |
+| `-d`, `--daemon` | - | Flag | - | Run server in background |
+| `-q`, `--quit` | - | Flag | - | Stop running background server |
+| `-s`, `--status` | - | Flag | - | Check server status |
+| `-nl`, `--no-log` | `RDP_NO_LOG` | Flag / `1` | - | Disable stdout logging and log files |
+| `-h`, `--help` | - | Flag | - | Display help menu |
 
 #### Custom Examples:
 ```bash
-# Maximum speed mode (4-bit color, 320x32 tiles):
-RDP_COLOR=4bit RDP_TILE=320x32 RDP_USER=dev RDP_PASSWORD=12345678 cargo run --release
+# Maximum speed mode (4-bit color, 320x32 tiles, 60 FPS in background):
+./target/release/mac-rdp-server -u dev -p 12345678 -c 4bit -t 320x32 -f 60 -d
 
 # Lossless 8-bit True Color mode:
-RDP_COLOR=8bit RDP_USER=dev RDP_PASSWORD=12345678 cargo run --release
+./target/release/mac-rdp-server -u dev -p 12345678 -c 8bit -d
 ```
 
 ---
