@@ -68,18 +68,41 @@ EOF
 
 echo "📄 Đã tạo file LaunchAgent: $PLIST_FILE"
 
-# Unload service cũ nếu đang chạy
-launchctl bootout "gui/$(id -u)/$PLIST_NAME" 2>/dev/null || launchctl unload "$PLIST_FILE" 2>/dev/null || true
+# 1. Dọn dẹp tiến trình cũ và giải phóng cổng 3389
+OLD_PIDS=$(lsof -ti:3389 2>/dev/null || true)
+if [ -n "$OLD_PIDS" ]; then
+    kill -9 $OLD_PIDS 2>/dev/null || true
+fi
 
-# Nạp service vào Session GUI hiện tại
-launchctl bootstrap "gui/$(id -u)" "$PLIST_FILE" 2>/dev/null || launchctl load "$PLIST_FILE"
+# 2. Gỡ bỏ triệt để đăng ký cũ khỏi launchd
+launchctl bootout "gui/$(id -u)/$PLIST_NAME" 2>/dev/null || true
+launchctl unload -w "$PLIST_FILE" 2>/dev/null || true
 
-echo ""
-echo "============================================================"
-echo "✅ Cài đặt thành công!"
-echo "📡 Mac RDP Server đang chạy ngầm trong GUI session hiện tại."
-echo "🔄 Server sẽ TỰ ĐỘNG KHỞI ĐỘNG mỗi khi bạn đăng nhập Mac."
-echo "🔑 Tài khoản: $USER_NAME / $PASSWORD"
-echo "📄 File log: /tmp/mac-rdp-server.log"
-echo "🛑 Để gỡ bỏ tự khởi động: ./uninstall-autostart.sh"
-echo "============================================================"
+# 3. Kích hoạt và nạp vào phiên làm việc GUI hiện tại
+launchctl enable "gui/$(id -u)/$PLIST_NAME" 2>/dev/null || true
+if ! launchctl bootstrap "gui/$(id -u)" "$PLIST_FILE" 2>/dev/null; then
+    launchctl load -w "$PLIST_FILE" 2>/dev/null || true
+fi
+launchctl kickstart -k "gui/$(id -u)/$PLIST_NAME" 2>/dev/null || true
+
+sleep 1
+
+# 4. Kiểm tra trạng thái hoạt động thực tế
+if launchctl list | grep -q "$PLIST_NAME" || lsof -i:3389 >/dev/null 2>&1; then
+    RUNNING_PID=$(lsof -ti:3389 2>/dev/null || launchctl list | grep "$PLIST_NAME" | awk '{print $1}')
+    echo ""
+    echo "============================================================"
+    echo "✅ Cài đặt và khởi động thành công!"
+    echo "📡 Mac RDP Server đang chạy ngầm trong GUI session (PID: $RUNNING_PID)"
+    echo "🔄 Server sẽ TỰ ĐỘNG KHỞI ĐỘNG mỗi khi bạn đăng nhập Mac."
+    echo "🔑 Tài khoản: $USER_NAME / $PASSWORD"
+    echo "📄 File log: /tmp/mac-rdp-server.log"
+    echo "🛑 Để gỡ bỏ tự khởi động: ./uninstall-autostart.sh"
+    echo "============================================================"
+else
+    echo ""
+    echo "============================================================"
+    echo "⚠️ LaunchAgent đã được tạo nhưng chưa chạy được. Chi tiết lỗi:"
+    cat /tmp/mac-rdp-server.log 2>/dev/null || true
+    echo "============================================================"
+fi
