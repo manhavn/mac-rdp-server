@@ -1,0 +1,37 @@
+[package]
+name = "mac-rdp-server"
+version = "0.1.0"
+edition = "2024"
+default-run = "mac-rdp-server"
+
+[dependencies]
+anyhow = "1.0.104"
+async-trait = "0.1.92"
+bytes = "1.12.1"
+core-foundation = "0.10.1"
+core-graphics = "0.25.0"
+ironrdp = "0.17.0"
+ironrdp-server = { version = "0.13.0", default-features = false, features = ["helper", "nscodec", "rayon"] }
+ironrdp-nscodec = { version = "0.2", features = ["encoder"] }
+rcgen = { version = "0.14.9", features = ["pem", "x509-parser"] }
+tokio = { version = "1.53.1", features = ["full", "macros"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+xcap = "0.9.8"
+
+ironrdp-connector = "0.10.0"
+ironrdp-async = "0.10.0"
+ironrdp-tokio = "0.10.0"
+ironrdp-pdu = "0.9.0"
+ironrdp-graphics = "0.9.0"
+tokio-rustls = "0.26.4"
+
+[patch.crates-io]
+ironrdp-server = { path = "./crates/ironrdp-server" }
+
+[workspace]
+members = [".", "crates/ironrdp-server"]
+
+
+
+
