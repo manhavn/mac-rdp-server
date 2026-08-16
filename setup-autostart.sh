@@ -170,6 +170,13 @@ if launchctl list | grep -q "$PLIST_NAME" || lsof -i:3389 >/dev/null 2>&1; then
     echo "🔄 Server sẽ TỰ ĐỘNG KHỞI ĐỘNG mỗi khi bạn đăng nhập Mac."
     echo "🔑 Tài khoản: $USER_NAME / $PASSWORD"
     echo "📄 File log: /tmp/mac-rdp-server.log"
+    echo ""
+    echo "⚠️ LƯU Ý ĐỂ THAO TÁC ĐƯỢC VỚI CỬA SỔ & CHUỘT (Giống TeamViewer):"
+    echo "   Nếu khi kết nối bạn chỉ thấy hình nền + topbar trống hoặc không click chuột được,"
+    echo "   hãy cấp quyền cho $BINARY_PATH một lần duy nhất:"
+    echo "   1. Ghi màn hình: System Settings -> Privacy & Security -> Screen Recording -> Thêm $BINARY_PATH (Bật ON)"
+    echo "   2. Trợ năng:     System Settings -> Privacy & Security -> Accessibility     -> Thêm $BINARY_PATH (Bật ON)"
+    echo ""
     echo "🛑 Để gỡ bỏ tự khởi động: ./uninstall-autostart.sh"
     echo "============================================================"
 else
