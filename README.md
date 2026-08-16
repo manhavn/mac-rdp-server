@@ -57,8 +57,13 @@ A high-performance **RDP (Remote Desktop Protocol) Server** written in **Rust** 
 # Stop background server:
 ./target/release/mac-rdp-server --quit
 
-# Run in foreground (interactive):
-./target/release/mac-rdp-server -u dev -p 12345678
+#### Auto-start on macOS Login (LaunchAgent - Background GUI Session):
+```bash
+# Enable auto-start on macOS login (attaches directly to active GUI session):
+./setup-autostart.sh
+
+# Remove from auto-start:
+./uninstall-autostart.sh
 ```
 
 ---

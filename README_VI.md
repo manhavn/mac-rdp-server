@@ -56,9 +56,15 @@ Dự án **Mac RDP Server** hiệu năng cao được viết bằng ngôn ngữ 
 
 # Dừng Server đang chạy ngầm:
 ./target/release/mac-rdp-server --quit
+```
 
-# Chạy trực tiếp (Interactive Foreground):
-./target/release/mac-rdp-server -u dev -p 12345678
+#### Tự động Khởi động cùng macOS (LaunchAgent trong GUI Session):
+```bash
+# Bật tự khởi động cùng máy (hoạt động trực tiếp trong phiên GUI desktop macOS):
+./setup-autostart.sh
+
+# Gỡ bỏ tự khởi động:
+./uninstall-autostart.sh
 ```
 
 ---
