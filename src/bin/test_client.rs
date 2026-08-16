@@ -90,8 +90,8 @@ async fn main() -> Result<()> {
         enable_tls: true,
         enable_credssp: false,
         credentials: Credentials::UsernamePassword {
-            username: "dev".to_string(),
-            password: "password123".to_string(),
+            username: std::env::var("RDP_USER").unwrap_or_else(|_| "dev".to_string()),
+            password: std::env::var("RDP_PASSWORD").unwrap_or_else(|_| "12345678".to_string()),
         },
         domain: None,
         client_build: 2600,

@@ -168,12 +168,14 @@ fn handle_quit() -> Result<()> {
 }
 
 /// Khởi động Server chạy ngầm dưới dạng Daemon (--daemon)
-fn handle_daemon() -> Result<()> {
+fn handle_daemon(no_log: bool) -> Result<()> {
     if let Ok(pid_str) = std::fs::read_to_string(PID_FILE) {
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
             if is_process_running(pid) {
                 println!("⚠️ Mac RDP Server is already running (PID: {}).", pid);
-                println!("📄 Logs: {}", LOG_FILE);
+                if !no_log {
+                    println!("📄 Logs: {}", LOG_FILE);
+                }
                 println!("🛑 To stop server, run: ./mac-rdp-server --quit");
                 return Ok(());
             }
@@ -181,17 +183,24 @@ fn handle_daemon() -> Result<()> {
     }
 
     let current_exe = std::env::current_exe().context("Failed to get current executable path")?;
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(LOG_FILE)
-        .context("Failed to open log file")?;
+    let mut cmd = std::process::Command::new(current_exe);
+    cmd.arg("--worker");
+    if no_log {
+        cmd.arg("--no-log");
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+    } else {
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(LOG_FILE)
+            .context("Failed to open log file")?;
+        cmd.stdout(std::process::Stdio::from(log_file.try_clone()?));
+        cmd.stderr(std::process::Stdio::from(log_file));
+    }
+    cmd.envs(std::env::vars());
 
-    let child = std::process::Command::new(current_exe)
-        .arg("--worker")
-        .envs(std::env::vars())
-        .stdout(std::process::Stdio::from(log_file.try_clone()?))
-        .stderr(std::process::Stdio::from(log_file))
+    let child = cmd
         .spawn()
         .context("Failed to spawn background daemon process")?;
 
@@ -202,7 +211,11 @@ fn handle_daemon() -> Result<()> {
     println!("🚀 Mac RDP Server started in background (Daemon Mode)");
     println!("📡 Listening on: 0.0.0.0:3389");
     println!("🆔 PID: {}", pid);
-    println!("📄 Log file: {}", LOG_FILE);
+    if no_log {
+        println!("📄 Log file: DISABLED (--no-log)");
+    } else {
+        println!("📄 Log file: {}", LOG_FILE);
+    }
     println!("🛑 To stop server, run: ./mac-rdp-server --quit");
     println!("============================================================");
 
@@ -232,6 +245,10 @@ fn handle_status() -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    let no_log = args.iter().any(|arg| arg == "--no-log" || arg == "-nl")
+        || std::env::var("RDP_NO_LOG")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
 
     // Xử lý tham số dòng lệnh CLI
     if args
@@ -244,7 +261,7 @@ async fn main() -> Result<()> {
         .iter()
         .any(|arg| arg == "--daemon" || arg == "-d" || arg == "start")
     {
-        return handle_daemon();
+        return handle_daemon(no_log);
     }
     if args
         .iter()
@@ -257,13 +274,18 @@ async fn main() -> Result<()> {
     let my_pid = std::process::id();
     let _ = std::fs::write(PID_FILE, my_pid.to_string());
 
-    // Khởi tạo logger
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "mac_rdp_server=info,ironrdp_server=info,ironrdp=warn".into()),
-        )
-        .init();
+    // Khởi tạo logger (tắt hoàn toàn khi có cờ --no-log)
+    if no_log {
+        tracing_subscriber::fmt().with_env_filter("off").init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                    "mac_rdp_server=info,ironrdp_server=info,ironrdp=warn".into()
+                }),
+            )
+            .init();
+    }
 
     let host = "0.0.0.0";
     let port = 3389;

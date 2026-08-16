@@ -48,6 +48,11 @@ A high-performance **RDP (Remote Desktop Protocol) Server** written in **Rust** 
 RDP_USER=dev RDP_PASSWORD=12345678 ./target/release/mac-rdp-server --daemon
 ```
 
+#### Start in Background without Logs (--no-log):
+```bash
+RDP_USER=dev RDP_PASSWORD=12345678 ./target/release/mac-rdp-server --daemon --no-log
+```
+
 #### Check Server Status:
 ```bash
 ./target/release/mac-rdp-server --status

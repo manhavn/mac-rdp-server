@@ -48,6 +48,11 @@ Dự án **Mac RDP Server** hiệu năng cao được viết bằng ngôn ngữ 
 RDP_USER=dev RDP_PASSWORD=12345678 ./target/release/mac-rdp-server --daemon
 ```
 
+#### Chạy ngầm không ghi log (--no-log):
+```bash
+RDP_USER=dev RDP_PASSWORD=12345678 ./target/release/mac-rdp-server --daemon --no-log
+```
+
 #### Kiểm tra trạng thái hoạt động:
 ```bash
 ./target/release/mac-rdp-server --status
