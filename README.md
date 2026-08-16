@@ -77,6 +77,7 @@ You can configure the server using either **trailing CLI options** (recommended)
 | :--- | :--- | :--- | :--- | :--- |
 | `-u`, `--user` | `RDP_USER` | Any string | `dev` | Authentication username |
 | `-p`, `--password` | `RDP_PASSWORD` | Any string | `12345678` | Authentication password |
+| `-D`, `--domain` | `RDP_DOMAIN` | Any string / empty | None (open) | Authentication domain (optional, supports empty or custom domain) |
 | `-P`, `--port` | `RDP_PORT` | `1..65535` | `3389` | Listening TCP port |
 | `-H`, `--host` | `RDP_HOST` | IPv4 address | `0.0.0.0` | Listening host interface |
 | `-c`, `--color` | `RDP_COLOR` | `4bit`, `5bit`, `6bit`, `8bit` | `6bit` | Color depth (4bit: max throughput, 6bit: crisp UI, 8bit: lossless) |

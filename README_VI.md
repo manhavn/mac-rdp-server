@@ -77,6 +77,7 @@ Bạn có thể truyền cấu hình trực tiếp qua **tham số dòng lệnh 
 | :--- | :--- | :--- | :--- | :--- |
 | `-u`, `--user` | `RDP_USER` | Chuỗi tùy ý | `dev` | Tên đăng nhập RDP |
 | `-p`, `--password` | `RDP_PASSWORD` | Chuỗi tùy ý | `12345678` | Mật khẩu đăng nhập RDP |
+| `-D`, `--domain` | `RDP_DOMAIN` | Chuỗi tùy ý / rỗng | None (tự do) | Domain xác thực RDP (tùy chọn, hỗ trợ domain rỗng hoặc custom) |
 | `-P`, `--port` | `RDP_PORT` | `1..65535` | `3389` | Cổng TCP lắng nghe |
 | `-H`, `--host` | `RDP_HOST` | Địa chỉ IP | `0.0.0.0` | Địa chỉ mạng lắng nghe |
 | `-c`, `--color` | `RDP_COLOR` | `4bit`, `5bit`, `6bit`, `8bit` | `6bit` | Mức nén & độ sâu màu (4bit: siêu nhẹ, 6bit: sắc nét, 8bit: lossless) |

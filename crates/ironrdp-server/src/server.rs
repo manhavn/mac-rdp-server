@@ -212,7 +212,12 @@ pub struct ExactMatchCredentialValidator {
 
 impl ExactMatchCredentialValidator {
     /// Build a validator that accepts only `expected` and rejects everything else.
-    pub fn new(expected: Credentials) -> Self {
+    pub fn new(mut expected: Credentials) -> Self {
+        if let Some(d) = &expected.domain {
+            if d.trim().is_empty() {
+                expected.domain = None;
+            }
+        }
         Self { expected }
     }
 }
@@ -223,10 +228,54 @@ impl CredentialValidator for ExactMatchCredentialValidator {
         &self,
         credentials: &Credentials,
     ) -> Result<CredentialDecision, CredentialValidationError> {
-        if credentials == &self.expected {
-            Ok(CredentialDecision::Accept)
-        } else {
-            Ok(CredentialDecision::Reject)
+        // 1. Password check
+        if credentials.password != self.expected.password {
+            return Ok(CredentialDecision::Reject);
+        }
+
+        // 2. Normalize and extract potential domain embedded in username (e.g. DOMAIN\username or username@DOMAIN)
+        let (client_dom_from_user, clean_username) =
+            if let Some((dom, user)) = credentials.username.split_once('\\') {
+                (Some(dom), user)
+            } else if let Some((user, dom)) = credentials.username.split_once('@') {
+                (Some(dom), user)
+            } else {
+                (None, credentials.username.as_str())
+            };
+
+        // 3. Username check (allow exact match or case-insensitive match)
+        let username_matches = clean_username == self.expected.username
+            || clean_username.eq_ignore_ascii_case(&self.expected.username);
+
+        if !username_matches {
+            return Ok(CredentialDecision::Reject);
+        }
+
+        // 4. Domain check
+        // Determine client domain if any (ignore empty, whitespace, or local dot ".")
+        let effective_client_domain = credentials
+            .domain
+            .as_deref()
+            .or(client_dom_from_user)
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty() && *s != ".");
+
+        match (&self.expected.domain, effective_client_domain) {
+            // When server does not require / configure a domain:
+            // Accept connection regardless of client domain (None, empty, ".", "WORKGROUP", etc.)
+            (None, _) => Ok(CredentialDecision::Accept),
+
+            // When server specifies a domain:
+            (Some(expected_dom), Some(client_dom)) => {
+                if expected_dom.trim().eq_ignore_ascii_case(client_dom) {
+                    Ok(CredentialDecision::Accept)
+                } else {
+                    Ok(CredentialDecision::Reject)
+                }
+            }
+
+            // Server expects domain, but client did not provide one
+            (Some(_), None) => Ok(CredentialDecision::Reject),
         }
     }
 }
@@ -1989,5 +2038,204 @@ impl<'a, W: FramedWrite> SharedWriter<'a, W> {
         Self {
             writer: Rc::new(Mutex::new(writer)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_exact_match_no_domain_configured() {
+        let validator = ExactMatchCredentialValidator::new(Credentials {
+            username: "dev".to_string(),
+            password: "secretpassword".to_string(),
+            domain: None,
+        });
+
+        // 1. Exact match with None domain
+        let res = validator
+            .validate(&Credentials {
+                username: "dev".to_string(),
+                password: "secretpassword".to_string(),
+                domain: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Accept);
+
+        // 2. Client sends empty string domain
+        let res = validator
+            .validate(&Credentials {
+                username: "dev".to_string(),
+                password: "secretpassword".to_string(),
+                domain: Some("".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Accept);
+
+        // 3. Client sends whitespace domain
+        let res = validator
+            .validate(&Credentials {
+                username: "dev".to_string(),
+                password: "secretpassword".to_string(),
+                domain: Some("   ".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Accept);
+
+        // 4. Client sends local dot "." domain
+        let res = validator
+            .validate(&Credentials {
+                username: "dev".to_string(),
+                password: "secretpassword".to_string(),
+                domain: Some(".".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Accept);
+
+        // 5. Client sends WORKGROUP / default domain
+        let res = validator
+            .validate(&Credentials {
+                username: "dev".to_string(),
+                password: "secretpassword".to_string(),
+                domain: Some("WORKGROUP".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Accept);
+
+        // 6. Client sends username as .\dev
+        let res = validator
+            .validate(&Credentials {
+                username: ".\\dev".to_string(),
+                password: "secretpassword".to_string(),
+                domain: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Accept);
+
+        // 7. Client sends username as \dev
+        let res = validator
+            .validate(&Credentials {
+                username: "\\dev".to_string(),
+                password: "secretpassword".to_string(),
+                domain: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Accept);
+
+        // 8. Wrong password
+        let res = validator
+            .validate(&Credentials {
+                username: "dev".to_string(),
+                password: "wrong".to_string(),
+                domain: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Reject);
+
+        // 9. Wrong username
+        let res = validator
+            .validate(&Credentials {
+                username: "other".to_string(),
+                password: "secretpassword".to_string(),
+                domain: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Reject);
+    }
+
+    #[tokio::test]
+    async fn test_exact_match_with_domain_configured() {
+        let validator = ExactMatchCredentialValidator::new(Credentials {
+            username: "admin".to_string(),
+            password: "pass".to_string(),
+            domain: Some("CORP".to_string()),
+        });
+
+        // 1. Correct domain in domain field
+        let res = validator
+            .validate(&Credentials {
+                username: "admin".to_string(),
+                password: "pass".to_string(),
+                domain: Some("CORP".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Accept);
+
+        // 2. Case-insensitive domain match
+        let res = validator
+            .validate(&Credentials {
+                username: "admin".to_string(),
+                password: "pass".to_string(),
+                domain: Some("corp".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Accept);
+
+        // 3. Domain provided via DOMAIN\user
+        let res = validator
+            .validate(&Credentials {
+                username: "CORP\\admin".to_string(),
+                password: "pass".to_string(),
+                domain: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Accept);
+
+        // 4. Domain provided via user@domain
+        let res = validator
+            .validate(&Credentials {
+                username: "admin@corp".to_string(),
+                password: "pass".to_string(),
+                domain: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Accept);
+
+        // 5. Missing domain should be rejected when server expects domain
+        let res = validator
+            .validate(&Credentials {
+                username: "admin".to_string(),
+                password: "pass".to_string(),
+                domain: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Reject);
+
+        // 6. Empty domain should be rejected when server expects domain
+        let res = validator
+            .validate(&Credentials {
+                username: "admin".to_string(),
+                password: "pass".to_string(),
+                domain: Some("".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Reject);
+
+        // 7. Wrong domain
+        let res = validator
+            .validate(&Credentials {
+                username: "admin".to_string(),
+                password: "pass".to_string(),
+                domain: Some("OTHER".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, CredentialDecision::Reject);
     }
 }

@@ -14,6 +14,7 @@ fi
 
 USER_NAME="${RDP_USER:-dev}"
 PASSWORD="${RDP_PASSWORD:-12345678}"
+DOMAIN="${RDP_DOMAIN:-}"
 PORT="${RDP_PORT:-3389}"
 COLOR="${RDP_COLOR:-6bit}"
 TILE="${RDP_TILE:-320x24}"
@@ -29,6 +30,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -p|--password|--pass)
             PASSWORD="$2"
+            shift 2
+            ;;
+        -D|--domain)
+            DOMAIN="$2"
             shift 2
             ;;
         -P|--port)
@@ -57,6 +62,7 @@ while [[ $# -gt 0 ]]; do
             echo "Tùy chọn:"
             echo "  -u, --user <USERNAME>       Tên đăng nhập RDP (mặc định: dev)"
             echo "  -p, --password <PASSWORD>   Mật khẩu đăng nhập RDP (mặc định: 12345678)"
+            echo "  -D, --domain <DOMAIN>       Domain xác thực RDP (tùy chọn, mặc định: none)"
             echo "  -P, --port <PORT>           Cổng kết nối RDP (mặc định: 3389)"
             echo "  -c, --color <DEPTH>         Mức nén màu: 4bit, 5bit, 6bit, 8bit (mặc định: 6bit)"
             echo "  -t, --tile <SIZE>           Kích thước ô gạch: 320x24, 320x32 (mặc định: 320x24)"
@@ -66,7 +72,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Ví dụ đổi mật khẩu khi cài đặt:"
             echo "  ./setup-autostart.sh -p MatKhauCuaBan"
-            echo "  ./setup-autostart.sh -u myuser -p MatKhauCuaBan"
+            echo "  ./setup-autostart.sh -u myuser -p MatKhauCuaBan -D WORKGROUP"
             echo "  RDP_PASSWORD=MatKhauCuaBan ./setup-autostart.sh"
             exit 0
             ;;
@@ -81,6 +87,11 @@ echo "🚀 Thiết lập Mac RDP Server khởi động cùng macOS (LaunchAgent)
 echo "📍 Binary: $BINARY_PATH"
 echo "🔑 Auth User: $USER_NAME"
 echo "🔑 Auth Password: $PASSWORD"
+if [ -n "$DOMAIN" ]; then
+    echo "🏢 Auth Domain: $DOMAIN"
+else
+    echo "🏢 Auth Domain: None (Open / Không bắt buộc)"
+fi
 echo "🎨 Color Depth: $COLOR"
 echo "🧩 Tile Grid: $TILE"
 echo "⚡ FPS: $FPS"
@@ -94,8 +105,11 @@ mkdir -p "$LAUNCH_AGENTS_DIR"
 
 # Tạo danh sách arguments cho plist
 EXTRA_ARGS=""
+if [ -n "$DOMAIN" ]; then
+    EXTRA_ARGS="<string>-D</string><string>$DOMAIN</string>"
+fi
 if [ "$NO_LOG" = "1" ]; then
-    EXTRA_ARGS="<string>--no-log</string>"
+    EXTRA_ARGS="$EXTRA_ARGS <string>--no-log</string>"
 fi
 
 # Tạo file cấu hình LaunchAgent chạy trong Session GUI của User

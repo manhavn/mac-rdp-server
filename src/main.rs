@@ -171,6 +171,7 @@ fn handle_quit() -> Result<()> {
 struct CliConfig {
     user: String,
     password: String,
+    domain: Option<String>,
     port: u16,
     host: String,
     color: String,
@@ -194,6 +195,7 @@ fn print_help() {
     println!("OPTIONS:");
     println!("  -u, --user <USERNAME>       Set RDP auth username [default: dev]");
     println!("  -p, --password <PASSWORD>   Set RDP auth password [default: 12345678]");
+    println!("  -D, --domain <DOMAIN>       Set RDP auth domain (optional) [default: none]");
     println!("  -P, --port <PORT>           Set listening port [default: 3389]");
     println!("  -H, --host <HOST>           Set listening host IP [default: 0.0.0.0]");
     println!("  -c, --color <DEPTH>         Color depth: 4bit, 5bit, 6bit, 8bit [default: 6bit]");
@@ -213,6 +215,7 @@ fn print_help() {
     println!();
     println!("EXAMPLES:");
     println!("  mac-rdp-server --user dev --password 12345678");
+    println!("  mac-rdp-server -u dev -p 12345678 -D WORKGROUP");
     println!("  mac-rdp-server -u dev -p 12345678 -d");
     println!("  mac-rdp-server -u dev -p 12345678 -c 4bit -t 320x32 -f 60 -d");
     println!("  mac-rdp-server --quit");
@@ -222,6 +225,10 @@ fn parse_cli_args() -> CliConfig {
     let args: Vec<String> = std::env::args().collect();
     let mut user = std::env::var("RDP_USER").unwrap_or_else(|_| "dev".to_string());
     let mut password = std::env::var("RDP_PASSWORD").unwrap_or_else(|_| "12345678".to_string());
+    let mut domain = std::env::var("RDP_DOMAIN")
+        .ok()
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty());
     let mut port: u16 = std::env::var("RDP_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -258,6 +265,13 @@ fn parse_cli_args() -> CliConfig {
             "-p" | "--password" | "--pass" => {
                 if i + 1 < args.len() {
                     password = args[i + 1].clone();
+                    i += 1;
+                }
+            }
+            "-D" | "--domain" => {
+                if i + 1 < args.len() {
+                    let val = args[i + 1].trim().to_string();
+                    domain = if val.is_empty() { None } else { Some(val) };
                     i += 1;
                 }
             }
@@ -330,6 +344,7 @@ fn parse_cli_args() -> CliConfig {
     CliConfig {
         user,
         password,
+        domain,
         port,
         host,
         color,
@@ -365,6 +380,9 @@ fn handle_daemon(cli: &CliConfig) -> Result<()> {
     cmd.arg("--worker");
     cmd.arg("-u").arg(&cli.user);
     cmd.arg("-p").arg(&cli.password);
+    if let Some(dom) = &cli.domain {
+        cmd.arg("-D").arg(dom);
+    }
     cmd.arg("-P").arg(cli.port.to_string());
     cmd.arg("-H").arg(&cli.host);
     cmd.arg("-c").arg(&cli.color);
@@ -399,6 +417,11 @@ fn handle_daemon(cli: &CliConfig) -> Result<()> {
     println!("🚀 Mac RDP Server started in background (Daemon Mode)");
     println!("📡 Listening on: {}:{}", cli.host, cli.port);
     println!("🔑 Auth User: {}", cli.user);
+    if let Some(dom) = &cli.domain {
+        println!("🏢 Auth Domain: {}", dom);
+    } else {
+        println!("🏢 Auth Domain: None (Open / Optional)");
+    }
     println!("🎨 Color Depth: {}", cli.color);
     println!("🧩 Tile Grid: {}", cli.tile);
     println!("⚡ FPS: {}", cli.fps);
@@ -458,6 +481,11 @@ async fn main() -> Result<()> {
     unsafe {
         std::env::set_var("RDP_USER", &cli.user);
         std::env::set_var("RDP_PASSWORD", &cli.password);
+        if let Some(dom) = &cli.domain {
+            std::env::set_var("RDP_DOMAIN", dom);
+        } else {
+            std::env::remove_var("RDP_DOMAIN");
+        }
         std::env::set_var("RDP_HOST", &cli.host);
         std::env::set_var("RDP_PORT", cli.port.to_string());
         std::env::set_var("RDP_COLOR", &cli.color);
@@ -491,6 +519,11 @@ async fn main() -> Result<()> {
     info!("📡 Listening on: {}:{}", cli.host, cli.port);
     info!("🔑 Auth Username: {}", cli.user);
     info!("🔑 Auth Password: {}", cli.password);
+    if let Some(dom) = &cli.domain {
+        info!("🏢 Auth Domain: {}", dom);
+    } else {
+        info!("🏢 Auth Domain: None (Mở / Không bắt buộc domain, chấp nhận domain rỗng)");
+    }
     info!(
         "⚡ Active Profile: {} (Tùy biến qua -m / --mode speed / quality / balanced)",
         cli.mode
@@ -534,7 +567,7 @@ async fn main() -> Result<()> {
     let credentials = Credentials {
         username: cli.user,
         password: cli.password,
-        domain: None,
+        domain: cli.domain,
     };
     let validator = Arc::new(ExactMatchCredentialValidator::new(credentials));
 

@@ -93,7 +93,7 @@ async fn main() -> Result<()> {
             username: std::env::var("RDP_USER").unwrap_or_else(|_| "dev".to_string()),
             password: std::env::var("RDP_PASSWORD").unwrap_or_else(|_| "12345678".to_string()),
         },
-        domain: None,
+        domain: std::env::var("RDP_DOMAIN").ok(),
         client_build: 2600,
         client_name: "RustRDPVNC".to_string(),
         keyboard_type: gcc::KeyboardType::IbmEnhanced,
