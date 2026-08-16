@@ -46,16 +46,16 @@ Dự án **Mac RDP Server** hiệu năng cao được viết bằng ngôn ngữ 
 #### Khởi chạy bằng Tham số Dòng lệnh CLI (Khuyên dùng):
 ```bash
 # Chạy ngầm trong nền (Daemon Mode):
-./target/release/mac-rdp-server -u dev -p 12345678 -d
+mac-rdp-server -u dev -p 12345678 -d
 
 # Chạy ngầm hoàn toàn không ghi log (--no-log):
-./target/release/mac-rdp-server -u dev -p 12345678 -d --no-log
+mac-rdp-server -u dev -p 12345678 -d --no-log
 
 # Kiểm tra trạng thái hoạt động:
-./target/release/mac-rdp-server --status
+mac-rdp-server --status
 
 # Dừng Server đang chạy ngầm:
-./target/release/mac-rdp-server --quit
+mac-rdp-server --quit
 ```
 
 #### Tự động Khởi động cùng macOS (LaunchAgent trong GUI Session):

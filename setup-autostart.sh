@@ -3,18 +3,19 @@ set -e
 
 # Chuyển về thư mục chứa script
 cd "$(dirname "$0")"
-PROJECT_DIR="$(pwd)"
-BINARY_PATH="$PROJECT_DIR/target/release/mac-rdp-server"
+# Xác định đường dẫn binary (ưu tiên /usr/local/bin/mac-rdp-server)
+if [ -f "/usr/local/bin/mac-rdp-server" ]; then
+    BINARY_PATH="/usr/local/bin/mac-rdp-server"
+elif command -v mac-rdp-server >/dev/null 2>&1; then
+    BINARY_PATH="$(command -v mac-rdp-server)"
+else
+    BINARY_PATH="/usr/local/bin/mac-rdp-server"
+fi
 
 echo "============================================================"
 echo "🚀 Thiết lập Mac RDP Server khởi động cùng macOS (LaunchAgent)"
+echo "📍 Binary: $BINARY_PATH"
 echo "============================================================"
-
-# Đảm bảo binary release đã được biên dịch
-if [ ! -f "$BINARY_PATH" ]; then
-    echo "📦 Đang biên dịch bản release..."
-    ./build.sh
-fi
 
 USER_NAME="${RDP_USER:-dev}"
 PASSWORD="${RDP_PASSWORD:-12345678}"
@@ -54,7 +55,7 @@ cat <<EOF > "$PLIST_FILE"
     <key>KeepAlive</key>
     <true/>
     <key>WorkingDirectory</key>
-    <string>$PROJECT_DIR</string>
+    <string>$HOME</string>
     <key>StandardOutPath</key>
     <string>/tmp/mac-rdp-server.log</string>
     <key>StandardErrorPath</key>

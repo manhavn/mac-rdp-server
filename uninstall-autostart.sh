@@ -18,5 +18,5 @@ else
 fi
 
 # Dừng server nếu đang còn chạy
-"$(dirname "$0")/target/release/mac-rdp-server" --quit 2>/dev/null || true
+/usr/local/bin/mac-rdp-server --quit 2>/dev/null || mac-rdp-server --quit 2>/dev/null || "$(dirname "$0")/target/release/mac-rdp-server" --quit 2>/dev/null || true
 echo "============================================================"

@@ -46,16 +46,17 @@ A high-performance **RDP (Remote Desktop Protocol) Server** written in **Rust** 
 #### Start with CLI Flags (Recommended):
 ```bash
 # Start in background (Daemon Mode):
-./target/release/mac-rdp-server -u dev -p 12345678 -d
+mac-rdp-server -u dev -p 12345678 -d
 
 # Start in background without logs (--no-log):
-./target/release/mac-rdp-server -u dev -p 12345678 -d --no-log
+mac-rdp-server -u dev -p 12345678 -d --no-log
 
 # Check status:
-./target/release/mac-rdp-server --status
+mac-rdp-server --status
 
 # Stop background server:
-./target/release/mac-rdp-server --quit
+mac-rdp-server --quit
+```
 
 #### Auto-start on macOS Login (LaunchAgent - Background GUI Session):
 ```bash
