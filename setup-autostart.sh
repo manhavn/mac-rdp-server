@@ -12,21 +12,91 @@ else
     BINARY_PATH="/usr/local/bin/mac-rdp-server"
 fi
 
-echo "============================================================"
-echo "🚀 Thiết lập Mac RDP Server khởi động cùng macOS (LaunchAgent)"
-echo "📍 Binary: $BINARY_PATH"
-echo "============================================================"
-
 USER_NAME="${RDP_USER:-dev}"
 PASSWORD="${RDP_PASSWORD:-12345678}"
 PORT="${RDP_PORT:-3389}"
 COLOR="${RDP_COLOR:-6bit}"
+TILE="${RDP_TILE:-320x24}"
 FPS="${RDP_FPS:-60}"
+NO_LOG="${RDP_NO_LOG:-0}"
+
+# Xử lý các tham số dòng lệnh truyền vào setup-autostart.sh
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -u|--user|--username)
+            USER_NAME="$2"
+            shift 2
+            ;;
+        -p|--password|--pass)
+            PASSWORD="$2"
+            shift 2
+            ;;
+        -P|--port)
+            PORT="$2"
+            shift 2
+            ;;
+        -c|--color|--bits)
+            COLOR="$2"
+            shift 2
+            ;;
+        -t|--tile)
+            TILE="$2"
+            shift 2
+            ;;
+        -f|--fps)
+            FPS="$2"
+            shift 2
+            ;;
+        -nl|--no-log)
+            NO_LOG="1"
+            shift 1
+            ;;
+        -h|--help)
+            echo "Hướng dẫn sử dụng: ./setup-autostart.sh [TÙY CHỌN]"
+            echo ""
+            echo "Tùy chọn:"
+            echo "  -u, --user <USERNAME>       Tên đăng nhập RDP (mặc định: dev)"
+            echo "  -p, --password <PASSWORD>   Mật khẩu đăng nhập RDP (mặc định: 12345678)"
+            echo "  -P, --port <PORT>           Cổng kết nối RDP (mặc định: 3389)"
+            echo "  -c, --color <DEPTH>         Mức nén màu: 4bit, 5bit, 6bit, 8bit (mặc định: 6bit)"
+            echo "  -t, --tile <SIZE>           Kích thước ô gạch: 320x24, 320x32 (mặc định: 320x24)"
+            echo "  -f, --fps <FPS>             Tần số quét màn hình (mặc định: 60)"
+            echo "  -nl, --no-log               Tắt toàn bộ log"
+            echo "  -h, --help                  Xem hướng dẫn"
+            echo ""
+            echo "Ví dụ đổi mật khẩu khi cài đặt:"
+            echo "  ./setup-autostart.sh -p MatKhauCuaBan"
+            echo "  ./setup-autostart.sh -u myuser -p MatKhauCuaBan"
+            echo "  RDP_PASSWORD=MatKhauCuaBan ./setup-autostart.sh"
+            exit 0
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+echo "============================================================"
+echo "🚀 Thiết lập Mac RDP Server khởi động cùng macOS (LaunchAgent)"
+echo "📍 Binary: $BINARY_PATH"
+echo "🔑 Auth User: $USER_NAME"
+echo "🔑 Auth Password: $PASSWORD"
+echo "🎨 Color Depth: $COLOR"
+echo "🧩 Tile Grid: $TILE"
+echo "⚡ FPS: $FPS"
+echo "============================================================"
+
 PLIST_NAME="com.dev.mac-rdp-server"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 PLIST_FILE="$LAUNCH_AGENTS_DIR/$PLIST_NAME.plist"
 
 mkdir -p "$LAUNCH_AGENTS_DIR"
+
+# Tạo danh sách arguments cho plist
+EXTRA_ARGS=""
+if [ "$NO_LOG" = "1" ]; then
+    EXTRA_ARGS="<string>--no-log</string>"
+fi
 
 # Tạo file cấu hình LaunchAgent chạy trong Session GUI của User
 cat <<EOF > "$PLIST_FILE"
@@ -47,8 +117,11 @@ cat <<EOF > "$PLIST_FILE"
         <string>$PORT</string>
         <string>-c</string>
         <string>$COLOR</string>
+        <string>-t</string>
+        <string>$TILE</string>
         <string>-f</string>
         <string>$FPS</string>
+        $EXTRA_ARGS
     </array>
     <key>RunAtLoad</key>
     <true/>
