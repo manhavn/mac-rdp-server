@@ -4,9 +4,11 @@ use core::num::NonZeroU16;
 use anyhow::{Context as _, Result, anyhow};
 use ironrdp_acceptor::DesktopSize;
 use ironrdp_graphics::diff::{Rect, find_different_rects_sub};
+use ironrdp_core::{Encode as _, WriteCursor};
+use ironrdp_pdu::bitmap::{BitmapData, BitmapUpdateData, Compression};
 use ironrdp_pdu::encode_vec;
 use ironrdp_pdu::fast_path::UpdateCode;
-use ironrdp_pdu::geometry::ExclusiveRectangle;
+use ironrdp_pdu::geometry::{ExclusiveRectangle, InclusiveRectangle};
 use ironrdp_pdu::pointer::{
     CachedPointerAttribute, ColorPointerAttribute, Point16, PointerAttribute,
     PointerPositionAttribute,
@@ -197,7 +199,7 @@ impl UpdateEncoder {
     ) -> Result<Self> {
         let bitmap_updater = {
             tracing::info!(
-                "🎨 [RDP GRAPHICS] Selected Codec: SetSurfaceBits (RDP6 Planar RLE 32bpp)"
+                "🎨 [RDP GRAPHICS] Selected Codec: FastPath Bitmap (RDP6 Planar RLE 32bpp)"
             );
             BitmapUpdater::None(NoneHandler)
         };
@@ -441,12 +443,12 @@ impl UpdateEncoder {
         updater.handle(&bitmap)
     }
 
-    fn encode_surface_command(&mut self, bitmap: &BitmapUpdate) -> Result<Vec<u8>> {
+    fn encode_bitmap_tile(&mut self, bitmap: &BitmapUpdate) -> Result<Vec<u8>> {
         let updater = self
             .bitmap_updater
             .as_mut()
             .expect("bitmap updater always Some");
-        updater.encode_surface_command(bitmap)
+        updater.encode_bitmap_tile(bitmap)
     }
 }
 
@@ -521,10 +523,9 @@ impl EncoderIter<'_> {
                         return None;
                     }
 
-                    // Gom nhiều ô gạch vào 1 gói FastPath (lên tới 14 KB)
-                    // Giảm số lượng gói tin từ 510 xuống còn ~30-40 gói/frame
-                    // Giúp Client nhận và vẽ tức thì (dưới 50ms), triệt tiêu hoàn toàn hiệu ứng quét từ trên xuống dưới
-                    let mut batched_data = Vec::with_capacity(16384);
+                    // Gom nhiều ô gạch vào 1 gói FastPath Bitmap chuẩn RDP (lên tới 14 KB)
+                    let mut batched_tiles = Vec::new();
+                    let mut batched_tiles_len = 0;
 
                     while pos < diffs.len() {
                         let rect = &diffs[pos];
@@ -583,32 +584,44 @@ impl EncoderIter<'_> {
                             continue;
                         };
 
-                        let cmd_bytes = match encoder.encode_surface_command(&sub) {
+                        let tile_bytes = match encoder.encode_bitmap_tile(&sub) {
                             Ok(bytes) => bytes,
                             Err(e) => return Some(Err(e)),
                         };
 
-                        // Gom cụm gói tin về 16 KB (16,000 bytes)
-                        // 100% luôn là Single FastPath Packet (<16,374 bytes), không phân mảnh, giải nén tức thì
-                        if !batched_data.is_empty()
-                            && (batched_data.len() + cmd_bytes.len() > 16000)
+                        if !batched_tiles.is_empty()
+                            && (batched_tiles_len + tile_bytes.len() > 14000)
                         {
                             break;
                         }
 
-                        batched_data.extend_from_slice(&cmd_bytes);
+                        batched_tiles_len += tile_bytes.len();
+                        batched_tiles.push(tile_bytes);
                         pos += 1;
                     }
 
                     self.state = State::BitmapDiffs { diffs, bitmap, pos };
 
-                    if batched_data.is_empty() {
+                    if batched_tiles.is_empty() {
                         continue;
                     }
 
+                    let mut final_buf = vec![0u8; batched_tiles_len + 16];
+                    let mut cursor = WriteCursor::new(&mut final_buf);
+                    if let Err(e) = BitmapUpdateData::encode_header(batched_tiles.len() as u16, &mut cursor) {
+                        return Some(Err(anyhow!("Failed to encode BitmapUpdateData header: {:?}", e)));
+                    }
+                    let header_len = cursor.pos();
+                    let mut write_pos = header_len;
+                    for tile in batched_tiles {
+                        final_buf[write_pos..write_pos + tile.len()].copy_from_slice(&tile);
+                        write_pos += tile.len();
+                    }
+                    final_buf.truncate(write_pos);
+
                     return Some(Ok(UpdateFragmenter::new(
-                        UpdateCode::SurfaceCommands,
-                        batched_data,
+                        UpdateCode::Bitmap,
+                        final_buf,
                     )));
                 }
                 State::Ended => return None,
@@ -649,10 +662,10 @@ impl BitmapUpdater {
         }
     }
 
-    fn encode_surface_command(&mut self, bitmap: &BitmapUpdate) -> Result<Vec<u8>> {
+    fn encode_bitmap_tile(&mut self, bitmap: &BitmapUpdate) -> Result<Vec<u8>> {
         match self {
-            Self::None(up) => up.encode_surface_command(bitmap),
-            _ => Err(anyhow!("unsupported updater for surface batching")),
+            Self::None(up) => up.encode_bitmap_tile(bitmap),
+            _ => Err(anyhow!("unsupported updater for bitmap batching")),
         }
     }
 
@@ -673,7 +686,7 @@ trait BitmapUpdateHandler {
 struct NoneHandler;
 
 impl NoneHandler {
-    fn encode_surface_command(&mut self, bitmap: &BitmapUpdate) -> Result<Vec<u8>> {
+    fn encode_bitmap_tile(&mut self, bitmap: &BitmapUpdate) -> Result<Vec<u8>> {
         let width = usize::from(bitmap.width.get());
         let height = usize::from(bitmap.height.get());
         let stride = bitmap.stride.get();
@@ -691,6 +704,7 @@ impl NoneHandler {
             .chunks(stride)
             .take(height)
             .map(|row| &row[..row_len.min(row.len())])
+            .rev() // Bottom-to-top row order for standard RDP Bitmap Data
             .flat_map(|row| row.iter().map(|&b| b & mask))
             .collect();
 
@@ -700,33 +714,43 @@ impl NoneHandler {
             true,
         )?;
 
-        let destination = ExclusiveRectangle {
-            left: bitmap.x,
-            top: bitmap.y,
-            right: bitmap.x + bitmap.width.get(),
-            bottom: bitmap.y + bitmap.height.get(),
-        };
-        let extended_bitmap_data = ExtendedBitmapDataPdu {
-            bpp: bitmap.format.bytes_per_pixel() * 8,
+        let data = BitmapData {
+            rectangle: InclusiveRectangle {
+                left: bitmap.x,
+                top: bitmap.y,
+                right: bitmap.x + bitmap.width.get() - 1,
+                bottom: bitmap.y + bitmap.height.get() - 1,
+            },
             width: bitmap.width.get(),
             height: bitmap.height.get(),
-            codec_id: 0,
-            header: None,
-            data: &compressed[..len],
+            bits_per_pixel: 32,
+            compression_flags: Compression::BITMAP_COMPRESSION
+                | Compression::NO_BITMAP_COMPRESSION_HDR,
+            compressed_data_header: None,
+            bitmap_data: &compressed[..len],
         };
-        let pdu = SurfaceBitsPdu {
-            destination,
-            extended_bitmap_data,
-        };
-        let cmd = SurfaceCommand::SetSurfaceBits(pdu);
-        Ok(encode_vec(&cmd)?)
+
+        let mut out = vec![0u8; len + 128];
+        let mut cursor = WriteCursor::new(&mut out);
+        data.encode(&mut cursor)
+            .map_err(|e| anyhow!("Failed to encode BitmapData: {:?}", e))?;
+        let written = cursor.pos();
+        out.truncate(written);
+        Ok(out)
     }
 }
 
 impl BitmapUpdateHandler for NoneHandler {
     fn handle(&mut self, bitmap: &BitmapUpdate) -> Result<UpdateFragmenter> {
-        let data = self.encode_surface_command(bitmap)?;
-        Ok(UpdateFragmenter::new(UpdateCode::SurfaceCommands, data))
+        let tile_bytes = self.encode_bitmap_tile(bitmap)?;
+        let mut final_buf = vec![0u8; tile_bytes.len() + 16];
+        let mut cursor = WriteCursor::new(&mut final_buf);
+        BitmapUpdateData::encode_header(1, &mut cursor)
+            .map_err(|e| anyhow!("Failed to encode BitmapUpdateData header: {:?}", e))?;
+        let header_len = cursor.pos();
+        final_buf[header_len..header_len + tile_bytes.len()].copy_from_slice(&tile_bytes);
+        final_buf.truncate(header_len + tile_bytes.len());
+        Ok(UpdateFragmenter::new(UpdateCode::Bitmap, final_buf))
     }
 }
 

@@ -58,7 +58,9 @@ fn order_capabilities() -> capability_sets::Order {
 
 fn surface_capabilities() -> capability_sets::SurfaceCommands {
     capability_sets::SurfaceCommands {
-        flags: capability_sets::CmdFlags::all(),
+        flags: capability_sets::CmdFlags::SET_SURFACE_BITS
+            | capability_sets::CmdFlags::FRAME_MARKER
+            | capability_sets::CmdFlags::STREAM_SURFACE_BITS,
     }
 }
 

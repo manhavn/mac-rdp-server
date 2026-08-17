@@ -73,7 +73,11 @@ async fn main() -> Result<()> {
         .with_env_filter("ironrdp=warn")
         .init();
 
-    let addr: SocketAddr = "127.0.0.1:3389".parse()?;
+    let port: u16 = std::env::var("RDP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(3389);
+    let addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
     println!("🔌 Connecting to RDP server at {}...", addr);
 
     let tcp_stream = TcpStream::connect(addr)
