@@ -154,8 +154,7 @@ pub struct MacDisplayUpdates {
     target_width: u16,
     target_height: u16,
     pending_resize: bool,
-    target_frame_time: Duration,
-    last_frame_instant: std::time::Instant,
+    interval: tokio::time::Interval,
     last_capture_error: bool,
     frame_count: u64,
 }
@@ -170,8 +169,9 @@ impl MacDisplayUpdates {
         fps: u32,
     ) -> Result<Self> {
         let display = CGDisplay::main();
-        let fps = fps.clamp(1, 60);
-        let target_frame_time = Duration::from_micros(1_000_000 / fps as u64);
+        let interval_ms = (1000 / fps.max(1)).max(16) as u64;
+        let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         Ok(Self {
             display,
@@ -180,8 +180,7 @@ impl MacDisplayUpdates {
             target_width,
             target_height,
             pending_resize,
-            target_frame_time,
-            last_frame_instant: std::time::Instant::now(),
+            interval,
             last_capture_error: false,
             frame_count: 0,
         })
@@ -267,11 +266,7 @@ impl RdpServerDisplayUpdates for MacDisplayUpdates {
             })));
         }
 
-        let elapsed = self.last_frame_instant.elapsed();
-        if elapsed < self.target_frame_time {
-            tokio::time::sleep(self.target_frame_time - elapsed).await;
-        }
-        self.last_frame_instant = std::time::Instant::now();
+        self.interval.tick().await;
 
         let display = self.display;
         let target_w = self.current_width;

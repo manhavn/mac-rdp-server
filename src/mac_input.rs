@@ -661,8 +661,8 @@ impl RdpServerInputHandler for MacInputHandler {
                 self.post_mouse_event(K_CG_EVENT_OTHER_MOUSE_UP, K_CG_MOUSE_BUTTON_CENTER, x, y);
             }
             MouseEvent::VerticalScroll { value } => {
-                // RDP sends +/- 120 per wheel notch
-                let lines = (value / 40) as i32;
+                // RDP sends +/- 120 per wheel notch (4 lines per notch for ultra-smooth responsiveness)
+                let lines = (value / 30) as i32;
                 self.post_scroll_event(lines);
             }
             _ => {}

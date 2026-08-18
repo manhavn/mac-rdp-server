@@ -106,9 +106,9 @@ impl UpdateEncoderCodecs {
 pub(crate) fn get_compression_mode() -> (u8, usize, usize) {
     let mode = std::env::var("RDP_MODE").unwrap_or_else(|_| "speed".to_string());
     let (default_mask, default_w, default_h) = match mode.to_lowercase().as_str() {
-        "quality" | "high" => (0xFF, 320, 32),
-        "balanced" | "medium" => (0xFF, 320, 32),
-        "speed" | "fast" | "low" | _ => (0xFF, 320, 32),
+        "quality" | "high" => (0xFC, 160, 32),
+        "balanced" | "medium" => (0xF8, 240, 24),
+        "speed" | "fast" | "low" | _ => (0xFC, 320, 24),
     };
 
     // Cho phép tùy biến Mức nén & Màu sắc qua ENV RDP_COLOR hoặc RDP_BITS / RDP_MASK (ví dụ: RDP_COLOR=4bit hoặc 5bit)
@@ -373,30 +373,39 @@ impl UpdateEncoder {
             }
         }
 
-        // CƠ CHẾ BỎ QUA HIỆU ỨNG TRUNG GIAN (Effect Dropping & Settling to Final Frame):
-        // - Vi mô <= 8%: 0ms delay -> 60 FPS tức thì (gõ phím, di chuột, trỏ nháy)
-        // - Vừa phải <= 25%: 16ms delay -> 60 FPS mượt (cuộn trang văn bản, di chuyển nhẹ)
-        // - Hiệu ứng lớn > 25%: delay 180ms -> Bỏ qua toàn bộ các frame bóng mờ hoạt họa trung gian,
-        //   chỉ gửi duy nhất 1 khung hình hoàn chỉnh cuối cùng khi hiệu ứng kết thúc!
+        // CƠ CHẾ ĐIỀU TIẾT TỐI ƯU (Custom Precise Tiers):
+        // - Vi mô <= 5%: 0ms delay -> Max 60 FPS tức thì!
+        // - Thay đổi <= 10%: 33ms delay -> 30 FPS
+        // - Thay đổi <= 20%: 50ms delay -> 20 FPS
+        // - Thay đổi <= 30%: 100ms delay -> 10 FPS
+        // - Thay đổi <= 50%: 300ms delay (0.3s) -> 2 FPS
+        // - Thay đổi <= 70%: 400ms delay (0.4s)
+        // - Thay đổi > 70%: 500ms delay (0.5s) -> 1 FPS
         if !force_full_screen && !tiles.is_empty() {
             let total_tiles = cols * rows;
             let dirty_count = tiles.len();
             let dirty_ratio = dirty_count as f64 / total_tiles as f64;
             let now = std::time::Instant::now();
 
-            let required_cooldown = if dirty_ratio <= 0.08 {
-                std::time::Duration::ZERO // Vi mô: 60 FPS tức thì
-            } else if dirty_ratio <= 0.25 {
-                std::time::Duration::from_millis(16) // Cuộn trang: 60 FPS mượt mà
-            } else if dirty_ratio <= 0.60 {
-                std::time::Duration::from_millis(180) // Hiệu ứng lớn: Bỏ qua frame trung gian, gom gửi frame cuối sau 180ms
+            let required_cooldown = if dirty_ratio <= 0.05 {
+                std::time::Duration::ZERO // 0ms delay / 60 FPS
+            } else if dirty_ratio <= 0.10 {
+                std::time::Duration::from_millis(33) // 30 FPS
+            } else if dirty_ratio <= 0.20 {
+                std::time::Duration::from_millis(50) // 20 FPS (50ms delay)
+            } else if dirty_ratio <= 0.30 {
+                std::time::Duration::from_millis(100) // 10 FPS (100ms delay)
+            } else if dirty_ratio <= 0.50 {
+                std::time::Duration::from_millis(300) // 50%: 0.3s delay (300ms) / 2 FPS
+            } else if dirty_ratio <= 0.70 {
+                std::time::Duration::from_millis(400) // 50-70%: 0.4s delay (400ms)
             } else {
-                std::time::Duration::from_millis(250) // Toàn cảnh/Đổi Space: Bỏ qua frame trung gian, gửi frame cuối sau 250ms
+                std::time::Duration::from_millis(500) // Trên 70%: 0.5s delay (500ms) / 1 FPS
             };
 
             let elapsed = now.duration_since(self.last_large_update);
             if elapsed < required_cooldown {
-                // Tạm thời bỏ qua frame này (KHÔNG cập nhật framebuffer), đợi hiệu ứng kết thúc để gửi ảnh tổng hợp cuối cùng
+                // Tạm thời bỏ qua frame này (KHÔNG cập nhật framebuffer), đợi cooldown kết thúc để gửi ảnh tổng hợp
                 return Vec::new();
             }
 
