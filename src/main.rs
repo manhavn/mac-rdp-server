@@ -180,6 +180,7 @@ struct CliConfig {
     res: String,
     mode: String,
     no_log: bool,
+    verbose: bool,
     daemon: bool,
     quit: bool,
     status: bool,
@@ -207,6 +208,7 @@ fn print_help() {
     println!(
         "  -m, --mode <MODE>           Profile preset: speed, quality, balanced [default: speed]"
     );
+    println!("  -v, --verbose, --debug      Enable verbose debug logging (real-time key events)");
     println!("  -d, --daemon                Run server in background (daemon mode)");
     println!("  -q, --quit                  Stop running background server");
     println!("  -s, --status                Check background server status");
@@ -247,6 +249,7 @@ fn parse_cli_args() -> CliConfig {
     let mut no_log = std::env::var("RDP_NO_LOG")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
+    let mut verbose = false;
     let mut daemon = false;
     let mut quit = false;
     let mut status = false;
@@ -321,6 +324,9 @@ fn parse_cli_args() -> CliConfig {
                     i += 1;
                 }
             }
+            "-v" | "--verbose" | "--debug" => {
+                verbose = true;
+            }
             "-d" | "--daemon" | "start" => {
                 daemon = true;
             }
@@ -353,6 +359,7 @@ fn parse_cli_args() -> CliConfig {
         res,
         mode,
         no_log,
+        verbose,
         daemon,
         quit,
         status,
@@ -499,15 +506,19 @@ async fn main() -> Result<()> {
     let my_pid = std::process::id();
     let _ = std::fs::write(PID_FILE, my_pid.to_string());
 
-    // Khởi tạo logger (tắt hoàn toàn khi có cờ --no-log)
+    // Khởi tạo logger (tắt hoàn toàn khi có cờ --no-log, bật debug chi tiết khi có cờ -v / --verbose)
     if cli.no_log {
         tracing_subscriber::fmt().with_env_filter("off").init();
     } else {
+        let default_filter = if cli.verbose {
+            "mac_rdp_server=debug,ironrdp_server=info,ironrdp=warn"
+        } else {
+            "mac_rdp_server=info,ironrdp_server=info,ironrdp=warn"
+        };
         tracing_subscriber::fmt()
             .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                    "mac_rdp_server=info,ironrdp_server=info,ironrdp=warn".into()
-                }),
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| default_filter.into()),
             )
             .init();
     }

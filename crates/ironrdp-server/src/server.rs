@@ -1856,8 +1856,6 @@ async fn send_access_denied(
     Ok(())
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
