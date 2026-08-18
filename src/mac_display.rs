@@ -34,6 +34,9 @@ pub fn check_screen_recording_permission() -> bool {
     has_access
 }
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
 pub struct MacDisplay {
     pub rdp_width: u16,
     pub rdp_height: u16,
@@ -43,6 +46,8 @@ pub struct MacDisplay {
     pub mac_logical_height: u16,
     pub fps: u32,
     pub needs_reactivation_resize: bool,
+    pub shared_rdp_w: Arc<AtomicU32>,
+    pub shared_rdp_h: Arc<AtomicU32>,
 }
 
 impl MacDisplay {
@@ -54,10 +59,6 @@ impl MacDisplay {
         let mac_h = display.pixels_high() as u16;
 
         // Tần số chụp màn hình gốc (Mặc định: 60 FPS cho phản hồi chuột & phím tức thì)
-        // Hệ thống Adaptive Motion Controller sẽ tự động điều tiết tần số gửi đi:
-        // - 60 FPS khi chuột di chuyển / gõ phím (vi mô <5% ô gạch)
-        // - 20 FPS khi cuộn trang / kéo cửa sổ (vừa 5-25% ô gạch)
-        // - 2.5 FPS khi chuyển cảnh / zoom toàn màn hình (>25% ô gạch)
         let fps = std::env::var("RDP_FPS")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
@@ -86,6 +87,9 @@ impl MacDisplay {
         info!("⚡ High-Performance Delta Diffing: ENABLED (0 KB/s when static, ~1-5 KB on input)");
         info!("============================================================");
 
+        let shared_rdp_w = Arc::new(AtomicU32::new(rdp_width as u32));
+        let shared_rdp_h = Arc::new(AtomicU32::new(rdp_height as u32));
+
         Ok(Self {
             rdp_width,
             rdp_height,
@@ -95,6 +99,8 @@ impl MacDisplay {
             mac_logical_height: mac_h,
             fps,
             needs_reactivation_resize: false,
+            shared_rdp_w,
+            shared_rdp_h,
         })
     }
 }
@@ -113,18 +119,19 @@ impl RdpServerDisplay for MacDisplay {
             let client_w = (client_size.width / 4) * 4;
             let client_h = (client_size.height / 4) * 4;
             info!(
-                "🖥️ [DISPLAY SYNC] Client Canvas: {}x{}, Native Target: {}x{}",
-                client_size.width, client_size.height, self.target_width, self.target_height
+                "🖥️ [DISPLAY SYNC] Client Canvas: {}x{}, Mac Native: {}x{}",
+                client_size.width,
+                client_size.height,
+                self.mac_logical_width,
+                self.mac_logical_height
             );
-            if client_w != self.target_width || client_h != self.target_height {
-                self.rdp_width = client_w;
-                self.rdp_height = client_h;
-                self.needs_reactivation_resize = true;
-            } else {
-                self.rdp_width = self.target_width;
-                self.rdp_height = self.target_height;
-                self.needs_reactivation_resize = false;
-            }
+            self.rdp_width = client_w;
+            self.rdp_height = client_h;
+            self.target_width = client_w;
+            self.target_height = client_h;
+            self.needs_reactivation_resize = false;
+            self.shared_rdp_w.store(client_w as u32, Ordering::Relaxed);
+            self.shared_rdp_h.store(client_h as u32, Ordering::Relaxed);
         }
         DesktopSize {
             width: self.rdp_width,

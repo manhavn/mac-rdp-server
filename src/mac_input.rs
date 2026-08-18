@@ -1,6 +1,6 @@
 use ironrdp_server::{KeyboardEvent, MouseEvent, RdpServerInputHandler};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
@@ -120,8 +120,10 @@ pub struct MacInputHandler {
     button4_down: AtomicBool,
     button5_down: AtomicBool,
     scroll_accumulator: Mutex<(f64, f64)>, // (vertical dy, horizontal dx)
-    scale_x: f64,
-    scale_y: f64,
+    rdp_w: Arc<AtomicU32>,
+    rdp_h: Arc<AtomicU32>,
+    mac_w: u16,
+    mac_h: u16,
     pressed_keys: Arc<Mutex<HashMap<u16, KeyState>>>,
     last_global_input: Arc<AtomicU64>,
     shutdown_tx: watch::Sender<bool>,
@@ -139,22 +141,24 @@ pub struct MacInputHandler {
 }
 
 impl MacInputHandler {
-    pub fn new(rdp_w: u16, rdp_h: u16, mac_w: u16, mac_h: u16) -> Self {
+    pub fn new(rdp_w: Arc<AtomicU32>, rdp_h: Arc<AtomicU32>, mac_w: u16, mac_h: u16) -> Self {
         check_accessibility_permission();
-        let scale_x = if rdp_w > 0 {
-            mac_w as f64 / rdp_w as f64
+        let cur_rdp_w = rdp_w.load(Ordering::Relaxed);
+        let cur_rdp_h = rdp_h.load(Ordering::Relaxed);
+        let scale_x = if cur_rdp_w > 0 {
+            mac_w as f64 / cur_rdp_w as f64
         } else {
             1.0
         };
-        let scale_y = if rdp_h > 0 {
-            mac_h as f64 / rdp_h as f64
+        let scale_y = if cur_rdp_h > 0 {
+            mac_h as f64 / cur_rdp_h as f64
         } else {
             1.0
         };
 
         info!(
-            "🖱️ Mouse Coordinate Mapping: RDP ({}x{}) -> macOS ({}x{}) [scale: {:.2}x, {:.2}x]",
-            rdp_w, rdp_h, mac_w, mac_h, scale_x, scale_y
+            "🖱️ Dynamic Coordinate Mapping: RDP ({}x{}) -> macOS ({}x{}) [scale: {:.2}x, {:.2}x]",
+            cur_rdp_w, cur_rdp_h, mac_w, mac_h, scale_x, scale_y
         );
 
         let pressed_keys: Arc<Mutex<HashMap<u16, KeyState>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -282,8 +286,10 @@ impl MacInputHandler {
             button4_down: AtomicBool::new(false),
             button5_down: AtomicBool::new(false),
             scroll_accumulator: Mutex::new((0.0, 0.0)),
-            scale_x,
-            scale_y,
+            rdp_w,
+            rdp_h,
+            mac_w,
+            mac_h,
             pressed_keys,
             last_global_input,
             shutdown_tx,
@@ -296,6 +302,24 @@ impl MacInputHandler {
             left_cmd,
             right_cmd,
             caps_lock,
+        }
+    }
+
+    pub fn scale_x(&self) -> f64 {
+        let cur_rdp_w = self.rdp_w.load(Ordering::Relaxed);
+        if cur_rdp_w > 0 {
+            self.mac_w as f64 / cur_rdp_w as f64
+        } else {
+            1.0
+        }
+    }
+
+    pub fn scale_y(&self) -> f64 {
+        let cur_rdp_h = self.rdp_h.load(Ordering::Relaxed);
+        if cur_rdp_h > 0 {
+            self.mac_h as f64 / cur_rdp_h as f64
+        } else {
+            1.0
         }
     }
 
@@ -652,8 +676,8 @@ impl RdpServerInputHandler for MacInputHandler {
     fn mouse(&mut self, event: MouseEvent) {
         match event {
             MouseEvent::Move { x, y } => {
-                let mac_x = (x as f64) * self.scale_x;
-                let mac_y = (y as f64) * self.scale_y;
+                let mac_x = (x as f64) * self.scale_x();
+                let mac_y = (y as f64) * self.scale_y();
                 self.current_x.store(mac_x as i32, Ordering::Relaxed);
                 self.current_y.store(mac_y as i32, Ordering::Relaxed);
 
@@ -777,8 +801,10 @@ impl RdpServerInputHandler for MacInputHandler {
                 self.scroll_accum(y as f64, -(x as f64));
             }
             MouseEvent::RelMove { x, y } => {
-                let cur_x = self.current_x.load(Ordering::Relaxed) as f64 + (x as f64 * self.scale_x);
-                let cur_y = self.current_y.load(Ordering::Relaxed) as f64 + (y as f64 * self.scale_y);
+                let cur_x =
+                    self.current_x.load(Ordering::Relaxed) as f64 + (x as f64 * self.scale_x());
+                let cur_y =
+                    self.current_y.load(Ordering::Relaxed) as f64 + (y as f64 * self.scale_y());
                 self.current_x.store(cur_x as i32, Ordering::Relaxed);
                 self.current_y.store(cur_y as i32, Ordering::Relaxed);
                 self.post_mouse_event(K_CG_EVENT_MOUSE_MOVED, K_CG_MOUSE_BUTTON_LEFT, cur_x, cur_y);

@@ -595,15 +595,13 @@ async fn main() -> Result<()> {
     let display_handler =
         MacDisplay::new().context("Failed to initialize macOS display capture")?;
     let input_handler = MacInputHandler::new(
-        display_handler.rdp_width,
-        display_handler.rdp_height,
+        display_handler.shared_rdp_w.clone(),
+        display_handler.shared_rdp_h.clone(),
         display_handler.mac_logical_width,
         display_handler.mac_logical_height,
     );
 
-    let codecs =
-        ironrdp::pdu::rdp::capability_sets::server_codecs_capabilities(&["rfx", "nscodec"])
-            .unwrap_or_else(|_| ironrdp::pdu::rdp::capability_sets::BitmapCodecs(vec![]));
+    let codecs = ironrdp::pdu::rdp::capability_sets::BitmapCodecs(vec![]);
 
     // Xây dựng RDP Server
     let mut server = RdpServer::builder()
