@@ -2,7 +2,6 @@ use core::fmt;
 use core::net::SocketAddr;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::time::Duration;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, bail};
@@ -40,7 +39,7 @@ use tokio::net::TcpSocket;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task;
 use tokio_rustls::TlsAcceptor;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::autodetect::{AutoDetectManager, RttSnapshot};
 use crate::clipboard::CliprdrServerFactory;
@@ -75,7 +74,7 @@ pub enum PostConnectionAction {
 ///
 /// All methods have default implementations that accept all connections
 /// and continue unconditionally.
-pub trait ConnectionHandler: Send {
+pub trait ConnectionHandler: Send + Sync {
     /// Called after `accept()` returns but before `run_connection()`.
     ///
     /// Return `false` to reject the connection (the TCP stream is dropped).
@@ -498,15 +497,13 @@ pub enum TransportTls {
 /// ```
 pub struct RdpServer {
     opts: RdpServerOptions,
-    // FIXME: replace with a channel and poll/process the handler?
     handler: Arc<Mutex<Box<dyn RdpServerInputHandler>>>,
     display: Arc<Mutex<Box<dyn RdpServerDisplay>>>,
-    static_channels: StaticChannelSet,
-    sound_factory: Option<Box<dyn SoundServerFactory>>,
-    cliprdr_factory: Option<Box<dyn CliprdrServerFactory>>,
+    sound_factory: Option<Arc<dyn SoundServerFactory>>,
+    cliprdr_factory: Option<Arc<dyn CliprdrServerFactory>>,
     echo_handle: EchoServerHandle,
     #[cfg(feature = "egfx")]
-    gfx_factory: Option<Box<dyn GfxServerFactory>>,
+    gfx_factory: Option<Arc<dyn GfxServerFactory>>,
     #[cfg(feature = "egfx")]
     gfx_handle: Option<crate::gfx::GfxServerHandle>,
     ev_sender: mpsc::UnboundedSender<ServerEvent>,
@@ -515,25 +512,30 @@ pub struct RdpServer {
     credential_validator: Option<Arc<dyn CredentialValidator>>,
     local_addr: Option<SocketAddr>,
     autodetect: Option<AutoDetectManager>,
-    connection_handler: Option<Box<dyn ConnectionHandler>>,
-    /// True while the client has sent `SuppressOutput { desktop_rect: None }`
-    /// — the standard RDP "I don't need display updates right now" signal
-    /// (mstsc raises it on window minimize). Cleared on
-    /// `SuppressOutput { Some(rect) }` or `RefreshRectangle` (sent on
-    /// refocus). Exposed via [`Self::display_suppressed_handle`] so display
-    /// backends can hold a clone and skip frame emission while it's set —
-    /// without this, a server keeps streaming high-bitrate
-    /// EGFX/H.264 frames into a minimized client, which accumulates them
-    /// and locks up its input dispatch for seconds on refocus while it
-    /// chews through the backlog.
+    connection_handler: Option<Arc<Mutex<Box<dyn ConnectionHandler>>>>,
     display_suppressed: Arc<AtomicBool>,
+    autodetect_rtt: Arc<AtomicU32>,
+}
 
-    /// Latest NetworkAutoDetect round-trip time in milliseconds, or `u32::MAX`
-    /// until the first measurement (and while auto-detect is disabled). Updated
-    /// on each RTT Measure Response when auto-detect is enabled (see
-    /// [`Self::enable_autodetect`]). Exposed via [`Self::autodetect_rtt_handle`]
-    /// so display backends can read a fresh, frame-traffic-independent network
-    /// RTT for flow control.
+pub struct RdpServerSession {
+    opts: RdpServerOptions,
+    handler: Arc<Mutex<Box<dyn RdpServerInputHandler>>>,
+    display: Arc<Mutex<Box<dyn RdpServerDisplay>>>,
+    static_channels: StaticChannelSet,
+    sound_factory: Option<Arc<dyn SoundServerFactory>>,
+    cliprdr_factory: Option<Arc<dyn CliprdrServerFactory>>,
+    echo_handle: EchoServerHandle,
+    #[cfg(feature = "egfx")]
+    gfx_factory: Option<Arc<dyn GfxServerFactory>>,
+    #[cfg(feature = "egfx")]
+    gfx_handle: Option<crate::gfx::GfxServerHandle>,
+    ev_sender: mpsc::UnboundedSender<ServerEvent>,
+    ev_receiver: Arc<Mutex<mpsc::UnboundedReceiver<ServerEvent>>>,
+    creds: Option<Credentials>,
+    credential_validator: Option<Arc<dyn CredentialValidator>>,
+    local_addr: Option<SocketAddr>,
+    autodetect: Option<AutoDetectManager>,
+    display_suppressed: Arc<AtomicBool>,
     autodetect_rtt: Arc<AtomicU32>,
 }
 
@@ -599,12 +601,11 @@ impl RdpServer {
             opts,
             handler: Arc::new(Mutex::new(handler)),
             display: Arc::new(Mutex::new(display)),
-            static_channels: StaticChannelSet::new(),
-            sound_factory,
-            cliprdr_factory,
+            sound_factory: sound_factory.map(Arc::from),
+            cliprdr_factory: cliprdr_factory.map(Arc::from),
             echo_handle: EchoServerHandle::new(ev_sender.clone()),
             #[cfg(feature = "egfx")]
-            gfx_factory,
+            gfx_factory: gfx_factory.map(Arc::from),
             #[cfg(feature = "egfx")]
             gfx_handle: None,
             ev_sender,
@@ -613,7 +614,7 @@ impl RdpServer {
             credential_validator: None,
             local_addr: None,
             autodetect: None,
-            connection_handler,
+            connection_handler: connection_handler.map(|h| Arc::new(Mutex::new(h))),
             display_suppressed: display_suppressed
                 .unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
             autodetect_rtt: {
@@ -630,20 +631,6 @@ impl RdpServer {
     }
 
     /// Set or clear the credential validator for TLS-mode connections.
-    ///
-    /// When set, credentials received from the client during
-    /// `SecureSettingsExchange` are validated through this callback before
-    /// the session is established. If the validator returns
-    /// [`CredentialDecision::Reject`] (or a [`CredentialValidationError`]),
-    /// the connection is rejected. Passing `None` clears any previously
-    /// configured validator.
-    ///
-    /// Most callers should configure the validator at construction time via
-    /// the builder's `with_credential_validator` method
-    /// ([`RdpServer::builder`]); this setter exists for dynamic
-    /// post-construction reconfiguration.
-    ///
-    /// Not used for CredSSP/Hybrid connections (those use pre-loaded credentials).
     pub fn set_credential_validator(&mut self, validator: Option<Arc<dyn CredentialValidator>>) {
         self.credential_validator = validator;
     }
@@ -652,85 +639,165 @@ impl RdpServer {
         &self.ev_sender
     }
 
-    /// Returns the shared "display suppressed" flag — `true` while the
-    /// connected client has sent `SuppressOutput { desktop_rect: None }`
-    /// (e.g., mstsc minimized).
-    ///
-    /// Display backends should hold a clone of this `Arc` and skip frame
-    /// emission while it's set, so the client doesn't accumulate a backlog
-    /// of frames it can't present until refocus. Cleared by the per-
-    /// connection PDU handler on `SuppressOutput { Some(rect) }` or
-    /// `RefreshRectangle`.
-    ///
-    /// **Caveat:** some clients (notably mstsc) send
-    /// `SuppressOutput { desktop_rect: None }` during their connect
-    /// handshake *before* their display surface is fully initialized; a
-    /// backend that honors the flag blindly will block that first frame
-    /// and leave the client with a half-initialized surface that doesn't
-    /// recover on un-suppress (visible as a frozen desktop on first
-    /// connect). Backends are advised to defer acting on the flag until
-    /// after the first frame has been delivered to the client, and to
-    /// debounce transient flaps (some clients pulse this PDU under wire
-    /// pressure on heavy CPU/IO loads) — e.g., only engage the gate once
-    /// the flag has been steady-`true` for ~1 s.
-    ///
-    /// The display backend typically needs to share this flag with the
-    /// server before any client connects (so the same `Arc` is read by
-    /// the backend's polling thread and written by the per-connection
-    /// PDU handler). To inject the shared instance at construction time,
-    /// use [`RdpServerBuilder::with_display_suppressed_handle`](crate::RdpServerBuilder::with_display_suppressed_handle).
-    ///
-    /// [crate::RdpServerBuilder]: crate::RdpServerBuilder
     pub fn display_suppressed_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.display_suppressed)
     }
 
-    /// Returns a handle to the latest NetworkAutoDetect RTT in milliseconds
-    /// (`u32::MAX` until the first measurement, and while auto-detect is
-    /// disabled). The server updates it on each RTT Measure Response; backends
-    /// clone the handle to read a fresh network RTT for flow control. Inject a
-    /// shared instance at construction with
-    /// [`RdpServerBuilder::with_autodetect_rtt_handle`](crate::RdpServerBuilder::with_autodetect_rtt_handle).
     pub fn autodetect_rtt_handle(&self) -> Arc<AtomicU32> {
         Arc::clone(&self.autodetect_rtt)
     }
 
-    /// Returns the shared ECHO server handle for runtime probe requests and RTT measurements.
     pub fn echo_handle(&self) -> &EchoServerHandle {
         &self.echo_handle
     }
 
-    /// Enable protocol-level auto-detect ([MS-RDPBCGR 2.2.14]).
-    ///
-    /// Auto-detect uses lightweight Share Data PDUs on the IO channel,
-    /// separate from the ECHO DVC. It supports bandwidth measurement
-    /// in addition to RTT and works even when DVC is unavailable.
-    ///
-    /// Send probes via [`ServerEvent::AutoDetectRttRequest`] and
-    /// query results with [`rtt_snapshot()`](Self::rtt_snapshot).
     pub fn enable_autodetect(&mut self) {
         self.autodetect = Some(AutoDetectManager::new());
     }
 
-    /// Get the latest auto-detect RTT snapshot.
-    ///
-    /// Returns `None` if auto-detect is not enabled or no measurements
-    /// have been received yet.
     pub fn rtt_snapshot(&self) -> Option<RttSnapshot> {
         self.autodetect.as_ref().and_then(|ad| ad.snapshot())
     }
 
-    /// Returns the shared EGFX server handle for proactive frame submission.
-    ///
-    /// Available after `build_server_with_handle()` returns `Some` during
-    /// channel setup. Display handlers use this to call
-    /// `send_avc420_frame()` / `send_avc444_frame()` and then signal the
-    /// event loop via `ServerEvent::Egfx`.
     #[cfg(feature = "egfx")]
     pub fn gfx_handle(&self) -> Option<&crate::gfx::GfxServerHandle> {
         self.gfx_handle.as_ref()
     }
 
+    pub fn set_credentials(&mut self, creds: Option<Credentials>) {
+        debug!(?creds, "Changing credentials");
+        self.creds = creds;
+    }
+
+    pub fn create_session(&self) -> RdpServerSession {
+        let (ev_sender, ev_receiver) = ServerEvent::create_channel();
+        RdpServerSession {
+            opts: self.opts.clone(),
+            handler: Arc::clone(&self.handler),
+            display: Arc::clone(&self.display),
+            static_channels: StaticChannelSet::new(),
+            sound_factory: self.sound_factory.clone(),
+            cliprdr_factory: self.cliprdr_factory.clone(),
+            echo_handle: EchoServerHandle::new(ev_sender.clone()),
+            #[cfg(feature = "egfx")]
+            gfx_factory: self.gfx_factory.clone(),
+            #[cfg(feature = "egfx")]
+            gfx_handle: None,
+            ev_sender,
+            ev_receiver: Arc::new(Mutex::new(ev_receiver)),
+            creds: self.creds.clone(),
+            credential_validator: self.credential_validator.clone(),
+            local_addr: self.local_addr,
+            autodetect: None,
+            display_suppressed: Arc::new(AtomicBool::new(false)),
+            autodetect_rtt: Arc::new(AtomicU32::new(u32::MAX)),
+        }
+    }
+
+    pub async fn run_connection<S>(&mut self, stream: S) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
+    {
+        self.create_session().run_connection(stream).await
+    }
+
+    pub async fn run_connection_with<S>(&mut self, stream: S, tls: TransportTls) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
+    {
+        self.create_session().run_connection_with(stream, tls).await
+    }
+
+    pub async fn run(&mut self) -> Result<()> {
+        let socket = match self.opts.addr {
+            SocketAddr::V4(_) => TcpSocket::new_v4().context("create IPv4 socket")?,
+            SocketAddr::V6(_) => TcpSocket::new_v6().context("create IPv6 socket")?,
+        };
+
+        #[cfg(unix)]
+        socket.set_reuseaddr(true).context("set SO_REUSEADDR")?;
+
+        socket.bind(self.opts.addr).context("bind listen address")?;
+
+        let listener = socket.listen(LISTENER_BACKLOG).context("start listener")?;
+        let local_addr = listener.local_addr()?;
+
+        debug!("Listening for connections on {local_addr}");
+        self.local_addr = Some(local_addr);
+
+        let connection_handler = self.connection_handler.clone();
+
+        loop {
+            let ev_receiver = Arc::clone(&self.ev_receiver);
+            let mut ev_receiver = ev_receiver.lock().await;
+            tokio::select! {
+                Some(event) = ev_receiver.recv() => {
+                    match event {
+                        ServerEvent::Quit(reason) => {
+                            debug!("Got quit event {reason}");
+                            break;
+                        }
+                        ServerEvent::GetLocalAddr(tx) => {
+                            let _ = tx.send(self.local_addr);
+                        }
+                        ServerEvent::SetCredentials(creds) => {
+                            self.set_credentials(Some(creds));
+                        }
+                        ev => {
+                            debug!("Unexpected event {:?}", ev);
+                        }
+                    }
+                },
+                Ok((stream, peer)) = listener.accept() => {
+                    let _ = stream.set_nodelay(true);
+                    info!(?peer, "🚀 [MULTI-CLIENT] Received incoming RDP connection");
+                    drop(ev_receiver);
+
+                    let accepted = if let Some(ref handler) = connection_handler {
+                        handler.lock().await.on_accept(peer)
+                    } else {
+                        true
+                    };
+
+                    if !accepted {
+                        warn!(?peer, "Connection rejected by handler");
+                        drop(stream);
+                    } else {
+                        let mut session = self.create_session();
+                        let handler_clone = connection_handler.clone();
+                        tokio::spawn(async move {
+                            info!(?peer, "⚡ [SESSION STARTED] Concurrent RDP session running for client");
+                            let started = tokio::time::Instant::now();
+                            let result = session.run_connection(stream).await;
+                            let duration = started.elapsed();
+
+                            if let Err(ref error) = result {
+                                error!(?peer, ?error, "Connection error");
+                            } else {
+                                info!(?peer, ?duration, "Connection disconnected cleanly");
+                            }
+
+                            if let Some(handler) = handler_clone {
+                                let mut guard = handler.lock().await;
+                                let err = result.as_ref().err();
+                                let _action = guard.on_disconnected(
+                                    peer,
+                                    duration,
+                                    err,
+                                );
+                            }
+                        });
+                    }
+                }
+                else => break,
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl RdpServerSession {
     fn attach_channels(&mut self, acceptor: &mut Acceptor) {
         if let Some(cliprdr_factory) = self.cliprdr_factory.as_deref() {
             let backend = cliprdr_factory.build_cliprdr_backend();
@@ -777,102 +844,22 @@ impl RdpServer {
         acceptor.attach_static_channel(dvc);
     }
 
-    /// Run a single RDP connection over `stream`, performing the
-    /// IronRDP-managed TLS handshake on `ShouldUpgrade` (standard TCP+TLS).
-    ///
-    /// Equivalent to [`run_connection_with`](Self::run_connection_with) with
-    /// [`TransportTls::Managed`].
+    pub fn event_sender(&self) -> &mpsc::UnboundedSender<ServerEvent> {
+        &self.ev_sender
+    }
+
     pub async fn run_connection<S>(&mut self, stream: S) -> Result<()>
     where
-        S: AsyncRead + AsyncWrite + Send + Sync + Unpin,
+        S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
     {
         self.run_connection_with(stream, TransportTls::Managed)
             .await
     }
 
-    /// Run a single RDP connection over `stream`, choosing who performs the TLS
-    /// handshake with `tls`.
-    ///
-    /// With [`TransportTls::Managed`], IronRDP performs the TLS accept on
-    /// `ShouldUpgrade`, exactly as [`run_connection`](Self::run_connection).
-    ///
-    /// With [`TransportTls::AlreadyDone`], the caller's `stream` has ALREADY
-    /// been transport-encrypted at a lower layer that the embedder owns
-    /// (typically a WSS terminator in the same process, or a TLS stream the
-    /// embedder accepted up front), so IronRDP skips the TLS handshake and
-    /// advances the state machine via [`Acceptor::mark_security_upgrade_as_done`].
-    /// Everything past the handshake, including the optional Hybrid CredSSP
-    /// exchange and finalization, is identical to the managed path.
-    ///
-    /// # Use case for [`TransportTls::AlreadyDone`]
-    ///
-    /// This mode decouples transport encryption from the RDP security-upgrade
-    /// step. It is for ironrdp-server endpoints that terminate transport
-    /// encryption themselves before the RDP state machine runs — for example a
-    /// server that accepts WSS directly, or one fronted by an in-process TLS
-    /// terminator — and therefore must not perform a second, inner TLS
-    /// handshake when the X.224 negotiation selects `PROTOCOL_SSL`.
-    ///
-    /// This is distinct from a [RDCleanPath] proxy deployment (e.g.
-    /// Devolutions Gateway), where the proxy performs a real TLS handshake with
-    /// a *separate* backend RDP server and relays that server's certificate
-    /// chain to the client. In that topology the backend server owns its own
-    /// TLS and uses [`TransportTls::Managed`]; this mode does not apply to it.
-    /// RDCleanPath is relevant here only as one client-side mechanism (see
-    /// precondition 2) for telling a client not to expect an inner handshake.
-    ///
-    /// # Preconditions for [`TransportTls::AlreadyDone`] (caller MUST guarantee)
-    ///
-    /// 1. The `stream` is already transport-encrypted by another layer
-    ///    (WSS, in-process, etc.). Passing a plain TCP stream here exposes
-    ///    RDP traffic in plaintext on the wire.
-    ///
-    /// 2. The connecting client must not expect an inner TLS handshake on this
-    ///    stream. Vanilla RDP clients (mstsc, xfreerdp) negotiate TLS from the
-    ///    X.224 `selectedProtocol` and have no concept of "TLS already done at a
-    ///    lower layer": they will hang or fail, and must use
-    ///    [`TransportTls::Managed`]. Arranging for a client to skip the inner
-    ///    handshake is the embedder's responsibility; RDCleanPath is one such
-    ///    mechanism, but this method does not depend on it.
-    ///
-    /// 3. If `self.opts.security` is [`RdpServerSecurity::Hybrid`], two things
-    ///    must hold. First, the client must support CredSSP over this
-    ///    transport; the SPNEGO exchange itself is transport-independent
-    ///    (CredSSP carries its own crypto via TSRequest), so it runs the same
-    ///    as on the managed path. Second, and less obvious: the CredSSP
-    ///    server-public-key confirmation (`pubKeyAuth`, per MS-CSSP) binds to
-    ///    the certificate the client validated at the lower transport layer,
-    ///    not to anything IronRDP does here. So the public key configured in
-    ///    [`RdpServerSecurity::Hybrid`] MUST be the public key of the
-    ///    certificate that lower layer (e.g. the WSS terminator) presented to
-    ///    the client, otherwise the client's `pubKeyAuth` check fails and
-    ///    Hybrid is rejected. This is the embedder's responsibility; it does
-    ///    not hold automatically. In practice it means terminating transport
-    ///    TLS with the same certificate configured for Hybrid.
-    ///
-    /// [RDCleanPath]: https://docs.rs/ironrdp-rdcleanpath
-    ///
-    /// # Wire-level invariant
-    ///
-    /// This method does NOT alter the X.224 negotiation. The acceptor still
-    /// advertises whatever `SecurityProtocol` it was constructed with, and the
-    /// connecting client still negotiates as normal. The only behaviour change
-    /// under [`TransportTls::AlreadyDone`] is that after the negotiation reaches
-    /// the security-upgrade gate, no TLS handshake is performed on the byte
-    /// stream, because the caller's stream is already past TLS at a lower layer.
     pub async fn run_connection_with<S>(&mut self, stream: S, tls: TransportTls) -> Result<()>
     where
-        S: AsyncRead + AsyncWrite + Send + Sync + Unpin,
+        S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
     {
-        // Per-connection state must start fresh: if the previous client
-        // disconnected while it had sent `SuppressOutput { None }` (e.g.,
-        // closed the mstsc window while minimized so the matching resume
-        // PDU never arrived), the flag would still read `true` here and the
-        // display backend would silently drop frames for the entire new
-        // session until/unless the new client happens to send a
-        // `RefreshRectangle` or `SuppressOutput { Some(rect) }`. Resetting
-        // here also covers backends that share an externally-created Arc via
-        // `set_display_suppressed_handle()`.
         self.display_suppressed.store(false, Ordering::Relaxed);
 
         let framed = TokioFramed::new(stream);
@@ -894,8 +881,6 @@ impl RdpServer {
             .context("accept_begin failed")?;
 
         match res {
-            // The only thing that varies between the two modes is who performs
-            // the TLS handshake; everything past it is `finalize_after_upgrade`.
             BeginResult::ShouldUpgrade(stream) => match tls {
                 TransportTls::Managed => {
                     let tls_acceptor = match &self.opts.security {
@@ -918,9 +903,6 @@ impl RdpServer {
                     .await?;
                 }
                 TransportTls::AlreadyDone => {
-                    // The stream is already past TLS (terminated at a lower
-                    // layer, e.g. a WSS terminator); do NOT call
-                    // tls_acceptor.accept on it.
                     self.finalize_after_upgrade(
                         TokioFramed::new(stream),
                         acceptor,
@@ -938,11 +920,6 @@ impl RdpServer {
         Ok(())
     }
 
-    /// Shared post-handshake tail for both [`TransportTls`] modes: mark the
-    /// security upgrade complete, run the optional Hybrid CredSSP exchange,
-    /// finalize, and shut the stream down. Single-sourcing this is what keeps
-    /// the managed and TLS-offloaded paths structurally identical past the
-    /// handshake, so per-connection state handling cannot drift between them.
     async fn finalize_after_upgrade<S>(
         &mut self,
         mut framed: TokioFramed<S>,
@@ -950,14 +927,11 @@ impl RdpServer {
         shutdown_label: &str,
     ) -> Result<()>
     where
-        S: AsyncRead + AsyncWrite + Sync + Send + Unpin,
+        S: AsyncRead + AsyncWrite + Sync + Send + Unpin + 'static,
     {
         acceptor.mark_security_upgrade_as_done();
 
         if let RdpServerSecurity::Hybrid((_, pub_key)) = &self.opts.security {
-            // Generic streams don't expose peer address. Use a neutral
-            // placeholder; it's unclear whether CredSSP/NTLM actually
-            // uses this value in practice.
             let client_name = "rdp-client".to_owned();
 
             ironrdp_acceptor::accept_credssp(
@@ -976,102 +950,6 @@ impl RdpServer {
         let (mut inner, _) = framed.into_inner();
         if let Err(e) = inner.shutdown().await {
             debug!(?e, "{} shutdown error", shutdown_label);
-        }
-
-        Ok(())
-    }
-
-    pub async fn run(&mut self) -> Result<()> {
-        // Create socket with control over options before binding.
-        // Using TcpSocket instead of TcpListener::bind() allows setting
-        // SO_REUSEADDR and IPv6 dual-stack mode.
-        let socket = match self.opts.addr {
-            SocketAddr::V4(_) => TcpSocket::new_v4().context("create IPv4 socket")?,
-            SocketAddr::V6(_) => {
-                // IPv6 socket: on Linux, dual-stack is the default
-                // (net.ipv6.bindv6only=0), so IPv4 clients connect as
-                // IPv4-mapped addresses (::ffff:x.x.x.x). On platforms
-                // where IPV6_V6ONLY defaults to 1 (Windows, some BSDs),
-                // only IPv6 clients will be accepted and a separate IPv4
-                // listener would be needed.
-                TcpSocket::new_v6().context("create IPv6 socket")?
-            }
-        };
-
-        // SO_REUSEADDR prevents EADDRINUSE when restarting the server while
-        // the previous socket is still in TIME_WAIT. Only set on Unix;
-        // on Windows SO_REUSEADDR has different semantics that allow a
-        // second process to bind the same port, which is a security risk.
-        #[cfg(unix)]
-        socket.set_reuseaddr(true).context("set SO_REUSEADDR")?;
-
-        socket.bind(self.opts.addr).context("bind listen address")?;
-
-        let listener = socket.listen(LISTENER_BACKLOG).context("start listener")?;
-        let local_addr = listener.local_addr()?;
-
-        debug!("Listening for connections on {local_addr}");
-        self.local_addr = Some(local_addr);
-
-        loop {
-            let ev_receiver = Arc::clone(&self.ev_receiver);
-            let mut ev_receiver = ev_receiver.lock().await;
-            tokio::select! {
-                Some(event) = ev_receiver.recv() => {
-                    match event {
-                        ServerEvent::Quit(reason) => {
-                            debug!("Got quit event {reason}");
-                            break;
-                        }
-                        ServerEvent::GetLocalAddr(tx) => {
-                            let _ = tx.send(self.local_addr);
-                        }
-                        ServerEvent::SetCredentials(creds) => {
-                            self.set_credentials(Some(creds));
-                        }
-                        ev => {
-                            debug!("Unexpected event {:?}", ev);
-                        }
-                    }
-                },
-                Ok((stream, peer)) = listener.accept() => {
-                    let _ = stream.set_nodelay(true);
-                    debug!(?peer, "Received connection");
-                    drop(ev_receiver);
-
-                    let accepted = self.connection_handler
-                        .as_mut()
-                        .is_none_or(|h| h.on_accept(peer));
-
-                    if !accepted {
-                        debug!(?peer, "Connection rejected by handler");
-                        drop(stream);
-                    } else {
-                        let started = tokio::time::Instant::now();
-                        let result = self.run_connection(stream).await;
-                        let duration = started.elapsed();
-
-                        if let Err(ref error) = result {
-                            error!(?error, "Connection error");
-                        }
-
-                        self.static_channels = StaticChannelSet::new();
-
-                        if let Some(ref mut handler) = self.connection_handler {
-                            let action = handler.on_disconnected(
-                                peer,
-                                duration,
-                                result.as_ref().err(),
-                            );
-                            if action == PostConnectionAction::Stop {
-                                debug!(?peer, "Handler requested stop after disconnect");
-                                break;
-                            }
-                        }
-                    }
-                }
-                else => break,
-            }
         }
 
         Ok(())
@@ -1349,111 +1227,87 @@ impl RdpServer {
         mut encoder: UpdateEncoder,
     ) -> Result<RunState>
     where
-        R: FramedRead,
-        W: FramedWrite,
+        R: FramedRead + Send + 'static,
+        W: FramedWrite + Send + 'static,
     {
         debug!("Starting client loop");
         let mut display_updates = self.display.lock().await.updates().await?;
-        let mut writer = SharedWriter::new(writer);
-        let mut display_writer = writer.clone();
-        let mut event_writer = writer.clone();
+        let mut buffer = vec![0u8; 4096];
+        let mut events = Vec::with_capacity(100);
         let ev_receiver = Arc::clone(&self.ev_receiver);
-        let s = Rc::new(Mutex::new(self));
+        let mut ev_receiver = ev_receiver.lock().await;
 
-        let this = Rc::clone(&s);
-        let dispatch_pdu = async move {
-            loop {
-                let (action, bytes) = reader.read_pdu().await?;
-                let mut this = this.lock().await;
-                match this
-                    .dispatch_pdu(
-                        action,
-                        bytes,
-                        &mut writer,
-                        io_channel_id,
-                        user_channel_id,
-                        message_channel_id,
-                    )
-                    .await?
-                {
-                    RunState::Continue => continue,
-                    state => break Ok(state),
-                }
-            }
-        };
-
-        let dispatch_display = async move {
-            let mut buffer = vec![0u8; 4096];
-
-            loop {
-                match display_updates.next_update().await {
-                    Ok(Some(update)) => {
-                        match Self::dispatch_display_update(
-                            update,
-                            &mut display_writer,
-                            user_channel_id,
+        let state = loop {
+            tokio::select! {
+                pdu_res = reader.read_pdu() => {
+                    let (action, bytes) = pdu_res?;
+                    match self
+                        .dispatch_pdu(
+                            action,
+                            bytes,
+                            writer,
                             io_channel_id,
-                            &mut buffer,
-                            encoder,
+                            user_channel_id,
+                            message_channel_id,
                         )
                         .await?
-                        {
-                            (RunState::Continue, enc) => {
-                                encoder = enc;
-                                continue;
-                            }
-                            (state, _) => {
-                                break Ok(state);
+                    {
+                        RunState::Continue => continue,
+                        state => break state,
+                    }
+                }
+                update_res = display_updates.next_update() => {
+                    match update_res {
+                        Ok(Some(update)) => {
+                            match Self::dispatch_display_update(
+                                update,
+                                writer,
+                                user_channel_id,
+                                io_channel_id,
+                                &mut buffer,
+                                encoder,
+                            )
+                            .await?
+                            {
+                                (RunState::Continue, enc) => {
+                                    encoder = enc;
+                                    continue;
+                                }
+                                (state, _) => break state,
                             }
                         }
+                        Ok(None) => break RunState::Disconnect,
+                        Err(error) => {
+                            warn!(error = format!("{error:#}"), "next_update failed");
+                        }
                     }
-                    Ok(None) => {
-                        break Ok(RunState::Disconnect);
+                }
+                nevents = ev_receiver.recv_many(&mut events, 100) => {
+                    if nevents == 0 {
+                        debug!("No server events.. stopping");
+                        break RunState::Disconnect;
                     }
-                    Err(error) => {
-                        warn!(error = format!("{error:#}"), "next_updated failed");
+                    while let Ok(ev) = ev_receiver.try_recv() {
+                        events.push(ev);
+                    }
+                    match self
+                        .dispatch_server_events(
+                            &mut events,
+                            writer,
+                            user_channel_id,
+                            message_channel_id,
+                        )
+                        .await?
+                    {
+                        RunState::Continue => continue,
+                        state => break state,
                     }
                 }
             }
         };
-
-        let this = Rc::clone(&s);
-        let mut ev_receiver = ev_receiver.lock().await;
-        let dispatch_events = async move {
-            let mut events = Vec::with_capacity(100);
-            loop {
-                let nevents = ev_receiver.recv_many(&mut events, 100).await;
-                if nevents == 0 {
-                    debug!("No sever events.. stopping");
-                    break Ok(RunState::Disconnect);
-                }
-                while let Ok(ev) = ev_receiver.try_recv() {
-                    events.push(ev);
-                }
-                let mut this = this.lock().await;
-                match this
-                    .dispatch_server_events(
-                        &mut events,
-                        &mut event_writer,
-                        user_channel_id,
-                        message_channel_id,
-                    )
-                    .await?
-                {
-                    RunState::Continue => continue,
-                    state => break Ok(state),
-                }
-            }
-        };
-
-        let state = tokio::select!(
-            state = dispatch_pdu => state,
-            state = dispatch_display => state,
-            state = dispatch_events => state,
-        );
 
         debug!("End of client loop: {state:?}");
-        state
+        Ok(state)
     }
 
     async fn client_accepted<R, W>(
@@ -1463,8 +1317,8 @@ impl RdpServer {
         result: AcceptorResult,
     ) -> Result<RunState>
     where
-        R: FramedRead,
-        W: FramedWrite,
+        R: FramedRead + Send + 'static,
+        W: FramedWrite + Send + 'static,
     {
         debug!("Client accepted");
 
@@ -1892,7 +1746,7 @@ impl RdpServer {
         mut acceptor: Acceptor,
     ) -> Result<TokioFramed<S>>
     where
-        S: AsyncRead + AsyncWrite + Sync + Send + Unpin,
+        S: AsyncRead + AsyncWrite + Sync + Send + Unpin + 'static,
     {
         loop {
             let (new_framed, result) = ironrdp_acceptor::accept_finalize(framed, &mut acceptor)
@@ -2002,44 +1856,7 @@ async fn send_access_denied(
     Ok(())
 }
 
-struct SharedWriter<'w, W: FramedWrite> {
-    writer: Rc<Mutex<&'w mut W>>,
-}
 
-impl<W: FramedWrite> Clone for SharedWriter<'_, W> {
-    fn clone(&self) -> Self {
-        Self {
-            writer: Rc::clone(&self.writer),
-        }
-    }
-}
-
-impl<W> FramedWrite for SharedWriter<'_, W>
-where
-    W: FramedWrite,
-{
-    type WriteAllFut<'write>
-        = core::pin::Pin<Box<dyn Future<Output = std::io::Result<()>> + 'write>>
-    where
-        Self: 'write;
-
-    fn write_all<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteAllFut<'a> {
-        Box::pin(async {
-            let mut writer = self.writer.lock().await;
-
-            writer.write_all(buf).await?;
-            Ok(())
-        })
-    }
-}
-
-impl<'a, W: FramedWrite> SharedWriter<'a, W> {
-    fn new(writer: &'a mut W) -> Self {
-        Self {
-            writer: Rc::new(Mutex::new(writer)),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

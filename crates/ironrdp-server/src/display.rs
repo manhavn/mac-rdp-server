@@ -242,7 +242,7 @@ impl core::fmt::Debug for BitmapUpdate {
 ///
 /// See [`RdpServerDisplay`] example.
 #[async_trait::async_trait]
-pub trait RdpServerDisplayUpdates {
+pub trait RdpServerDisplayUpdates: Send {
     /// # Cancel safety
     ///
     /// This method MUST be cancellation safe because it is used in a

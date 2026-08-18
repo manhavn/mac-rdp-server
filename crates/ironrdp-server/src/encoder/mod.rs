@@ -3,8 +3,8 @@ use core::num::NonZeroU16;
 
 use anyhow::{Context as _, Result, anyhow};
 use ironrdp_acceptor::DesktopSize;
-use ironrdp_graphics::diff::{Rect, find_different_rects_sub};
 use ironrdp_core::{Encode as _, WriteCursor};
+use ironrdp_graphics::diff::{Rect, find_different_rects_sub};
 use ironrdp_pdu::bitmap::{BitmapData, BitmapUpdateData, Compression};
 use ironrdp_pdu::encode_vec;
 use ironrdp_pdu::fast_path::UpdateCode;
@@ -608,8 +608,13 @@ impl EncoderIter<'_> {
 
                     let mut final_buf = vec![0u8; batched_tiles_len + 16];
                     let mut cursor = WriteCursor::new(&mut final_buf);
-                    if let Err(e) = BitmapUpdateData::encode_header(batched_tiles.len() as u16, &mut cursor) {
-                        return Some(Err(anyhow!("Failed to encode BitmapUpdateData header: {:?}", e)));
+                    if let Err(e) =
+                        BitmapUpdateData::encode_header(batched_tiles.len() as u16, &mut cursor)
+                    {
+                        return Some(Err(anyhow!(
+                            "Failed to encode BitmapUpdateData header: {:?}",
+                            e
+                        )));
                     }
                     let header_len = cursor.pos();
                     let mut write_pos = header_len;
@@ -619,10 +624,7 @@ impl EncoderIter<'_> {
                     }
                     final_buf.truncate(write_pos);
 
-                    return Some(Ok(UpdateFragmenter::new(
-                        UpdateCode::Bitmap,
-                        final_buf,
-                    )));
+                    return Some(Ok(UpdateFragmenter::new(UpdateCode::Bitmap, final_buf)));
                 }
                 State::Ended => return None,
             };

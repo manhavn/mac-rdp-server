@@ -37,7 +37,7 @@ pub use helper::TlsIdentityCtx;
 pub use server::{
     ConnectionHandler, CredentialDecision, CredentialValidationError, CredentialValidator,
     Credentials, ExactMatchCredentialValidator, PostConnectionAction, RdpServer, RdpServerOptions,
-    RdpServerSecurity, ServerEvent, ServerEventSender, TransportTls,
+    RdpServerSecurity, RdpServerSession, ServerEvent, ServerEventSender, TransportTls,
 };
 pub use sound::{RdpsndServerHandler, RdpsndServerMessage, SoundServerFactory};
 

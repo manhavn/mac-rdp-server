@@ -27,7 +27,7 @@ pub type GfxServerHandle = Arc<Mutex<GraphicsPipelineServer>>;
 ///
 /// Implements `ServerEventSender` so the factory can signal the server event loop
 /// when EGFX frames are ready to be drained and sent.
-pub trait GfxServerFactory: ServerEventSender + Send {
+pub trait GfxServerFactory: ServerEventSender + Send + Sync {
     /// Create a handler for EGFX callbacks (caps negotiation, frame acks).
     fn build_gfx_handler(&self) -> Box<dyn GraphicsPipelineHandler>;
 
