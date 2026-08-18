@@ -737,7 +737,15 @@ impl NoneHandler {
             .take(height)
             .map(|row| &row[..row_len.min(row.len())])
             .rev() // Bottom-to-top row order for standard RDP Bitmap Data
-            .flat_map(|row| row.iter().map(|&b| b & mask))
+            .flat_map(|row| {
+                row.chunks(4).flat_map(|px| {
+                    if px.len() == 4 {
+                        [px[0] & mask, px[1] & mask, px[2] & mask, 0xFF]
+                    } else {
+                        [0, 0, 0, 0xFF]
+                    }
+                })
+            })
             .collect();
 
         let len = encoder.encode_pixels_stream::<_, ironrdp_graphics::rdp6::BgrAChannels>(

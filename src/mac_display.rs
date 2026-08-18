@@ -116,15 +116,9 @@ impl RdpServerDisplay for MacDisplay {
                 "🖥️ [DISPLAY SYNC] Client Canvas: {}x{}, Native Target: {}x{}",
                 client_size.width, client_size.height, self.target_width, self.target_height
             );
-            if client_w != self.target_width || client_h != self.target_height {
-                self.rdp_width = client_w;
-                self.rdp_height = client_h;
-                self.needs_reactivation_resize = true;
-            } else {
-                self.rdp_width = self.target_width;
-                self.rdp_height = self.target_height;
-                self.needs_reactivation_resize = false;
-            }
+            self.rdp_width = client_w;
+            self.rdp_height = client_h;
+            self.needs_reactivation_resize = false;
         }
         DesktopSize {
             width: self.rdp_width,

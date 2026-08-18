@@ -1389,11 +1389,6 @@ impl RdpServerSession {
                     }
                 }
                 CapabilitySet::Bitmap(b) => {
-                    if !b.desktop_resize_flag {
-                        debug!("Desktop resize is not supported by the client");
-                        continue;
-                    }
-
                     let client_size = DesktopSize {
                         width: b.desktop_width,
                         height: b.desktop_height,
@@ -1404,6 +1399,10 @@ impl RdpServerSession {
                         .await
                         .request_initial_size(client_size)
                         .await;
+
+                    if !b.desktop_resize_flag {
+                        debug!("Desktop resize is not supported by the client");
+                    }
 
                     // It's problematic when the client didn't resize, as we send bitmap updates that don't fit.
                     // The client will likely drop the connection.
