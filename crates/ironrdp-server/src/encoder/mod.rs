@@ -178,6 +178,7 @@ pub(crate) struct UpdateEncoder {
     #[allow(dead_code)]
     max_request_size: usize,
     frame_count: u64,
+    #[allow(dead_code)]
     last_large_update: std::time::Instant,
 }
 
@@ -372,46 +373,6 @@ impl UpdateEncoder {
             }
         }
 
-        // CƠ CHẾ ĐIỀU TIẾT TỐI ƯU (Custom Precise Tiers):
-        // - Vi mô <= 5%: 0ms delay -> Max 60 FPS tức thì!
-        // - Thay đổi <= 10%: 33ms delay -> 30 FPS
-        // - Thay đổi <= 20%: 50ms delay -> 20 FPS
-        // - Thay đổi <= 30%: 100ms delay -> 10 FPS
-        // - Thay đổi <= 50%: 300ms delay (0.3s) -> 2 FPS
-        // - Thay đổi > 70%: 500ms delay (0.5s) -> 1 FPS
-        if !force_full_screen && !tiles.is_empty() {
-            let total_tiles = cols * rows;
-            let dirty_count = tiles.len();
-            let dirty_ratio = dirty_count as f64 / total_tiles as f64;
-            let now = std::time::Instant::now();
-
-            let required_cooldown = if dirty_ratio <= 0.05 {
-                std::time::Duration::ZERO // 0ms delay / 60 FPS
-            } else if dirty_ratio <= 0.10 {
-                std::time::Duration::from_millis(33) // 30 FPS
-            } else if dirty_ratio <= 0.20 {
-                std::time::Duration::from_millis(50) // 20 FPS (50ms delay)
-            } else if dirty_ratio <= 0.30 {
-                std::time::Duration::from_millis(100) // 10 FPS (100ms delay)
-            } else if dirty_ratio <= 0.50 {
-                std::time::Duration::from_millis(300) // 50%: 0.3s delay (300ms) / 2 FPS
-            } else if dirty_ratio <= 0.70 {
-                std::time::Duration::from_millis(400) // 50-70%: 0.4s delay (400ms)
-            } else {
-                std::time::Duration::from_millis(500) // Trên 70%: 0.5s delay (500ms) / 1 FPS
-            };
-
-            let elapsed = now.duration_since(self.last_large_update);
-            if elapsed < required_cooldown {
-                // Tạm thời bỏ qua frame này (KHÔNG cập nhật framebuffer), đợi cooldown kết thúc để gửi ảnh tổng hợp
-                return Vec::new();
-            }
-
-            if !required_cooldown.is_zero() {
-                self.last_large_update = now;
-            }
-        }
-
         tiles
     }
 
@@ -443,6 +404,7 @@ impl UpdateEncoder {
         updater.handle(&bitmap)
     }
 
+    #[allow(dead_code)]
     fn encode_bitmap_tile(&mut self, bitmap: &BitmapUpdate) -> Result<Vec<u8>> {
         let updater = self
             .bitmap_updater
@@ -455,10 +417,11 @@ impl UpdateEncoder {
 #[derive(Debug, Default)]
 enum State {
     Start(DisplayUpdate),
-    BitmapDiffs {
-        diffs: Vec<Rect>,
-        bitmap: BitmapUpdate,
+    ReadyBuffers {
+        buffers: Vec<Vec<u8>>,
         pos: usize,
+        bitmap: BitmapUpdate,
+        diffs: Vec<Rect>,
     },
     #[default]
     Ended,
@@ -497,10 +460,110 @@ impl EncoderIter<'_> {
                             continue;
                         }
                         let diffs = encoder.bitmap_diffs(&bitmap);
-                        self.state = State::BitmapDiffs {
-                            diffs,
-                            bitmap,
+                        if diffs.is_empty() {
+                            continue;
+                        }
+
+                        #[cfg(feature = "rayon")]
+                        use rayon::prelude::*;
+
+                        let handler = NoneHandler;
+
+                        #[cfg(feature = "rayon")]
+                        let encoded_res: Result<Vec<Vec<u8>>> = diffs
+                            .par_iter()
+                            .filter_map(|rect| {
+                                let x = u16::try_from(rect.x).ok()?;
+                                let y = u16::try_from(rect.y).ok()?;
+                                let width = NonZeroU16::new(u16::try_from(rect.width).ok()?)?;
+                                let height = NonZeroU16::new(u16::try_from(rect.height).ok()?)?;
+                                let sub = bitmap.sub(x, y, width, height)?;
+                                Some(handler.encode_bitmap_tile(&sub))
+                            })
+                            .collect();
+
+                        #[cfg(not(feature = "rayon"))]
+                        let encoded_res: Result<Vec<Vec<u8>>> = diffs
+                            .iter()
+                            .filter_map(|rect| {
+                                let x = u16::try_from(rect.x).ok()?;
+                                let y = u16::try_from(rect.y).ok()?;
+                                let width = NonZeroU16::new(u16::try_from(rect.width).ok()?)?;
+                                let height = NonZeroU16::new(u16::try_from(rect.height).ok()?)?;
+                                let sub = bitmap.sub(x, y, width, height)?;
+                                Some(handler.encode_bitmap_tile(&sub))
+                            })
+                            .collect();
+
+                        let encoded_tiles = match encoded_res {
+                            Ok(tiles) => tiles,
+                            Err(e) => return Some(Err(e)),
+                        };
+
+                        if encoded_tiles.is_empty() {
+                            continue;
+                        }
+
+                        // Gom các ô gạch thành từng batch an toàn (<= 14 KB mỗi PDU để tương thích 100% với mọi Client)
+                        let mut buffers = Vec::new();
+                        let mut current_batch: Vec<Vec<u8>> = Vec::new();
+                        let mut current_batch_len = 0;
+
+                        for tile in encoded_tiles {
+                            if !current_batch.is_empty() && (current_batch_len + tile.len() > 14_000) {
+                                let mut final_buf = vec![0u8; current_batch_len + 16];
+                                let mut cursor = WriteCursor::new(&mut final_buf);
+                                if let Err(e) = BitmapUpdateData::encode_header(
+                                    current_batch.len() as u16,
+                                    &mut cursor,
+                                ) {
+                                    return Some(Err(anyhow!(
+                                        "Failed to encode BitmapUpdateData header: {:?}",
+                                        e
+                                    )));
+                                }
+                                let header_len = cursor.pos();
+                                let mut write_pos = header_len;
+                                for t in current_batch.drain(..) {
+                                    final_buf[write_pos..write_pos + t.len()].copy_from_slice(&t);
+                                    write_pos += t.len();
+                                }
+                                final_buf.truncate(write_pos);
+                                buffers.push(final_buf);
+                                current_batch_len = 0;
+                            }
+
+                            current_batch_len += tile.len();
+                            current_batch.push(tile);
+                        }
+
+                        if !current_batch.is_empty() {
+                            let mut final_buf = vec![0u8; current_batch_len + 16];
+                            let mut cursor = WriteCursor::new(&mut final_buf);
+                            if let Err(e) = BitmapUpdateData::encode_header(
+                                current_batch.len() as u16,
+                                &mut cursor,
+                            ) {
+                                return Some(Err(anyhow!(
+                                    "Failed to encode BitmapUpdateData header: {:?}",
+                                    e
+                                )));
+                            }
+                            let header_len = cursor.pos();
+                            let mut write_pos = header_len;
+                            for t in current_batch {
+                                final_buf[write_pos..write_pos + t.len()].copy_from_slice(&t);
+                                write_pos += t.len();
+                            }
+                            final_buf.truncate(write_pos);
+                            buffers.push(final_buf);
+                        }
+
+                        self.state = State::ReadyBuffers {
+                            buffers,
                             pos: 0,
+                            bitmap,
+                            diffs,
                         };
                         continue;
                     }
@@ -512,119 +575,33 @@ impl EncoderIter<'_> {
                     DisplayUpdate::CachedPointer(idx) => UpdateEncoder::cached_pointer(idx),
                     DisplayUpdate::Resize(_) => return None,
                 },
-                State::BitmapDiffs {
-                    diffs,
-                    bitmap,
+                State::ReadyBuffers {
+                    buffers,
                     mut pos,
+                    bitmap,
+                    diffs,
                 } => {
-                    if pos >= diffs.len() {
+                    if pos >= buffers.len() {
                         encoder.bitmap_update_framebuffer(bitmap, &diffs);
                         self.state = State::Ended;
                         return None;
                     }
 
-                    // Gom nhiều ô gạch vào 1 gói FastPath Bitmap chuẩn RDP (lên tới 14 KB)
-                    let mut batched_tiles = Vec::new();
-                    let mut batched_tiles_len = 0;
-
-                    while pos < diffs.len() {
-                        let rect = &diffs[pos];
-                        let Rect {
-                            x,
-                            y,
-                            width,
-                            height,
-                        } = *rect;
-
-                        let x = match u16::try_from(x) {
-                            Ok(x) => x,
-                            Err(_) => {
-                                return Some(Err(anyhow!(
-                                    "invalid `x`: out of range integral conversion"
-                                )));
-                            }
+                    let buf = buffers[pos].clone();
+                    pos += 1;
+                    if pos >= buffers.len() {
+                        encoder.bitmap_update_framebuffer(bitmap, &diffs);
+                        self.state = State::Ended;
+                    } else {
+                        self.state = State::ReadyBuffers {
+                            buffers,
+                            pos,
+                            bitmap,
+                            diffs,
                         };
-                        let y = match u16::try_from(y) {
-                            Ok(y) => y,
-                            Err(_) => {
-                                return Some(Err(anyhow!(
-                                    "invalid `y`: out of range integral conversion"
-                                )));
-                            }
-                        };
-                        let width = match u16::try_from(width) {
-                            Ok(width) => match NonZeroU16::new(width) {
-                                Some(width) => width,
-                                None => {
-                                    return Some(Err(anyhow!("rectangle width cannot be zero")));
-                                }
-                            },
-                            Err(_) => {
-                                return Some(Err(anyhow!(
-                                    "invalid `width`: out of range integral conversion"
-                                )));
-                            }
-                        };
-                        let height = match u16::try_from(height) {
-                            Ok(height) => match NonZeroU16::new(height) {
-                                Some(height) => height,
-                                None => {
-                                    return Some(Err(anyhow!("rectangle height cannot be zero")));
-                                }
-                            },
-                            Err(_) => {
-                                return Some(Err(anyhow!(
-                                    "invalid `height`: out of range integral conversion"
-                                )));
-                            }
-                        };
-
-                        let Some(sub) = bitmap.sub(x, y, width, height) else {
-                            pos += 1;
-                            continue;
-                        };
-
-                        let tile_bytes = match encoder.encode_bitmap_tile(&sub) {
-                            Ok(bytes) => bytes,
-                            Err(e) => return Some(Err(e)),
-                        };
-
-                        if !batched_tiles.is_empty()
-                            && (batched_tiles_len + tile_bytes.len() > 14000)
-                        {
-                            break;
-                        }
-
-                        batched_tiles_len += tile_bytes.len();
-                        batched_tiles.push(tile_bytes);
-                        pos += 1;
                     }
 
-                    self.state = State::BitmapDiffs { diffs, bitmap, pos };
-
-                    if batched_tiles.is_empty() {
-                        continue;
-                    }
-
-                    let mut final_buf = vec![0u8; batched_tiles_len + 16];
-                    let mut cursor = WriteCursor::new(&mut final_buf);
-                    if let Err(e) =
-                        BitmapUpdateData::encode_header(batched_tiles.len() as u16, &mut cursor)
-                    {
-                        return Some(Err(anyhow!(
-                            "Failed to encode BitmapUpdateData header: {:?}",
-                            e
-                        )));
-                    }
-                    let header_len = cursor.pos();
-                    let mut write_pos = header_len;
-                    for tile in batched_tiles {
-                        final_buf[write_pos..write_pos + tile.len()].copy_from_slice(&tile);
-                        write_pos += tile.len();
-                    }
-                    final_buf.truncate(write_pos);
-
-                    return Some(Ok(UpdateFragmenter::new(UpdateCode::Bitmap, final_buf)));
+                    return Some(Ok(UpdateFragmenter::new(UpdateCode::Bitmap, buf)));
                 }
                 State::Ended => return None,
             };
@@ -664,6 +641,7 @@ impl BitmapUpdater {
         }
     }
 
+    #[allow(dead_code)]
     fn encode_bitmap_tile(&mut self, bitmap: &BitmapUpdate) -> Result<Vec<u8>> {
         match self {
             Self::None(up) => up.encode_bitmap_tile(bitmap),
@@ -688,7 +666,7 @@ trait BitmapUpdateHandler {
 struct NoneHandler;
 
 impl NoneHandler {
-    fn encode_bitmap_tile(&mut self, bitmap: &BitmapUpdate) -> Result<Vec<u8>> {
+    fn encode_bitmap_tile(&self, bitmap: &BitmapUpdate) -> Result<Vec<u8>> {
         let width = usize::from(bitmap.width.get());
         let height = usize::from(bitmap.height.get());
         let stride = bitmap.stride.get();

@@ -154,7 +154,8 @@ pub struct MacDisplayUpdates {
     target_width: u16,
     target_height: u16,
     pending_resize: bool,
-    interval: tokio::time::Interval,
+    target_frame_time: Duration,
+    last_frame_instant: std::time::Instant,
     last_capture_error: bool,
     frame_count: u64,
 }
@@ -169,9 +170,8 @@ impl MacDisplayUpdates {
         fps: u32,
     ) -> Result<Self> {
         let display = CGDisplay::main();
-        let interval_ms = (1000 / fps.max(1)).max(16) as u64;
-        let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let fps = fps.clamp(1, 60);
+        let target_frame_time = Duration::from_micros(1_000_000 / fps as u64);
 
         Ok(Self {
             display,
@@ -180,7 +180,8 @@ impl MacDisplayUpdates {
             target_width,
             target_height,
             pending_resize,
-            interval,
+            target_frame_time,
+            last_frame_instant: std::time::Instant::now(),
             last_capture_error: false,
             frame_count: 0,
         })
@@ -204,12 +205,13 @@ impl MacDisplayUpdates {
         let raw = data.bytes();
 
         let dst_stride = dst_w * 4;
-        let mut bgra = vec![0u8; dst_stride * dst_h];
+        let expected_len = dst_stride * dst_h;
 
-        if src_w == dst_w && src_h == dst_h {
-            let copy_len = bgra.len().min(raw.len());
-            bgra[..copy_len].copy_from_slice(&raw[..copy_len]);
+        let bgra = if src_w == dst_w && src_h == dst_h {
+            let copy_len = expected_len.min(raw.len());
+            raw[..copy_len].to_vec()
         } else if src_w == dst_w * 2 && src_h == dst_h * 2 {
+            let mut bgra = vec![0u8; expected_len];
             let src_stride = src_w * 4;
             for y in 0..dst_h {
                 let src_row = (y * 2) * src_stride;
@@ -220,7 +222,9 @@ impl MacDisplayUpdates {
                     bgra[dst_px..dst_px + 4].copy_from_slice(&raw[src_px..src_px + 4]);
                 }
             }
+            bgra
         } else {
+            let mut bgra = vec![0u8; expected_len];
             let src_stride = cg_img.bytes_per_row();
             let x_ratio = ((src_w as u64) << 16) / (dst_w as u64);
             let y_ratio = ((src_h as u64) << 16) / (dst_h as u64);
@@ -237,7 +241,8 @@ impl MacDisplayUpdates {
                     bgra[dst_px..dst_px + 4].copy_from_slice(&raw[src_px..src_px + 4]);
                 }
             }
-        }
+            bgra
+        };
 
         Ok((bgra, target_w, target_h))
     }
@@ -262,7 +267,11 @@ impl RdpServerDisplayUpdates for MacDisplayUpdates {
             })));
         }
 
-        self.interval.tick().await;
+        let elapsed = self.last_frame_instant.elapsed();
+        if elapsed < self.target_frame_time {
+            tokio::time::sleep(self.target_frame_time - elapsed).await;
+        }
+        self.last_frame_instant = std::time::Instant::now();
 
         let display = self.display;
         let target_w = self.current_width;
