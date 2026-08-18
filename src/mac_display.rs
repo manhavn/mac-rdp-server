@@ -5,10 +5,287 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use core_graphics::display::CGDisplay;
 use ironrdp_server::{
-    BitmapUpdate, DesktopSize, DisplayUpdate, PixelFormat, RdpServerDisplay,
+    BitmapUpdate, DesktopSize, DisplayUpdate, PixelFormat, RGBAPointer, RdpServerDisplay,
     RdpServerDisplayUpdates,
 };
-use tracing::{error, info};
+use std::collections::{HashMap, VecDeque};
+use tracing::{debug, error, info};
+
+#[link(name = "objc", kind = "dylib")]
+#[link(name = "AppKit", kind = "framework")]
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+    fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+    fn objc_msgSend(
+        receiver: *mut std::ffi::c_void,
+        op: *mut std::ffi::c_void,
+        ...
+    ) -> *mut std::ffi::c_void;
+    fn objc_autoreleasePoolPush() -> *mut std::ffi::c_void;
+    fn objc_autoreleasePoolPop(pool: *mut std::ffi::c_void);
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct NSPoint {
+    x: f64,
+    y: f64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct NSSize {
+    width: f64,
+    height: f64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct NSRect {
+    origin: NSPoint,
+    size: NSSize,
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGImageGetWidth(image: *mut std::ffi::c_void) -> usize;
+    fn CGImageGetHeight(image: *mut std::ffi::c_void) -> usize;
+    fn CGColorSpaceCreateDeviceRGB() -> *mut std::ffi::c_void;
+    fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
+    fn CGBitmapContextCreate(
+        data: *mut std::ffi::c_void,
+        width: usize,
+        height: usize,
+        bitsPerComponent: usize,
+        bytesPerRow: usize,
+        space: *mut std::ffi::c_void,
+        bitmapInfo: u32,
+    ) -> *mut std::ffi::c_void;
+    fn CGContextDrawImage(c: *mut std::ffi::c_void, rect: NSRect, image: *mut std::ffi::c_void);
+    fn CGContextRelease(c: *mut std::ffi::c_void);
+}
+
+const K_CG_IMAGE_ALPHA_PREMULTIPLIED_FIRST: u32 = 2;
+const K_CG_BITMAP_BYTE_ORDER_32_LITTLE: u32 = 2 << 12;
+
+pub struct MacCursorRaw {
+    pub width: u16,
+    pub height: u16,
+    pub hot_x: u16,
+    pub hot_y: u16,
+    pub bgra_bottom_up: Vec<u8>,
+    pub hash: u64,
+}
+
+pub fn capture_macos_cursor() -> Option<MacCursorRaw> {
+    unsafe {
+        let pool = objc_autoreleasePoolPush();
+
+        let cls_nsapp = objc_getClass(c"NSApplication".as_ptr());
+        let sel_shared = sel_registerName(c"sharedApplication".as_ptr());
+        let _ = objc_msgSend(cls_nsapp, sel_shared);
+
+        let cls_nscursor = objc_getClass(c"NSCursor".as_ptr());
+        let sel_cur_sys = sel_registerName(c"currentSystemCursor".as_ptr());
+        let sel_cur = sel_registerName(c"currentCursor".as_ptr());
+        let sel_arrow = sel_registerName(c"arrowCursor".as_ptr());
+        let sel_image = sel_registerName(c"image".as_ptr());
+        let sel_hotspot = sel_registerName(c"hotSpot".as_ptr());
+        let sel_size = sel_registerName(c"size".as_ptr());
+        let sel_cgimage = sel_registerName(c"CGImageForProposedRect:context:hints:".as_ptr());
+
+        let mut cursor = objc_msgSend(cls_nscursor, sel_cur_sys);
+        if cursor.is_null() {
+            cursor = objc_msgSend(cls_nscursor, sel_cur);
+        }
+        if cursor.is_null() {
+            cursor = objc_msgSend(cls_nscursor, sel_arrow);
+        }
+        if cursor.is_null() {
+            objc_autoreleasePoolPop(pool);
+            return None;
+        }
+
+        let img = objc_msgSend(cursor, sel_image);
+        if img.is_null() {
+            objc_autoreleasePoolPop(pool);
+            return None;
+        }
+
+        let hot_fn: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> NSPoint =
+            std::mem::transmute(objc_msgSend as *const ());
+        let hotspot = hot_fn(cursor, sel_hotspot);
+
+        let size_fn: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> NSSize =
+            std::mem::transmute(objc_msgSend as *const ());
+        let pt_size = size_fn(img, sel_size);
+
+        let cg_fn: unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
+        let cg_img = cg_fn(
+            img,
+            sel_cgimage,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        if cg_img.is_null() {
+            objc_autoreleasePoolPop(pool);
+            return None;
+        }
+
+        let width = CGImageGetWidth(cg_img);
+        let height = CGImageGetHeight(cg_img);
+        if width == 0 || height == 0 || width > 96 || height > 96 {
+            objc_autoreleasePoolPop(pool);
+            return None;
+        }
+
+        let stride = width * 4;
+        let mut top_down_buf = vec![0u8; stride * height];
+        let color_space = CGColorSpaceCreateDeviceRGB();
+        let ctx = CGBitmapContextCreate(
+            top_down_buf.as_mut_ptr() as *mut std::ffi::c_void,
+            width,
+            height,
+            8,
+            stride,
+            color_space,
+            K_CG_IMAGE_ALPHA_PREMULTIPLIED_FIRST | K_CG_BITMAP_BYTE_ORDER_32_LITTLE,
+        );
+        CGColorSpaceRelease(color_space);
+
+        if ctx.is_null() {
+            objc_autoreleasePoolPop(pool);
+            return None;
+        }
+
+        let rect = NSRect {
+            origin: NSPoint { x: 0.0, y: 0.0 },
+            size: NSSize {
+                width: width as f64,
+                height: height as f64,
+            },
+        };
+        CGContextDrawImage(ctx, rect, cg_img);
+        CGContextRelease(ctx);
+
+        // Convert top-down to bottom-up for RDP
+        let mut bgra_bottom_up = vec![0u8; stride * height];
+        for y in 0..height {
+            let src_y = y;
+            let dst_y = height - 1 - y;
+            let src_offset = src_y * stride;
+            let dst_offset = dst_y * stride;
+            bgra_bottom_up[dst_offset..dst_offset + stride]
+                .copy_from_slice(&top_down_buf[src_offset..src_offset + stride]);
+        }
+
+        let scale_x = if pt_size.width > 0.0 {
+            width as f64 / pt_size.width
+        } else {
+            1.0
+        };
+        let scale_y = if pt_size.height > 0.0 {
+            height as f64 / pt_size.height
+        } else {
+            1.0
+        };
+
+        let hot_x =
+            ((hotspot.x * scale_x).round().max(0.0) as u16).min(width.saturating_sub(1) as u16);
+        let hot_y =
+            ((hotspot.y * scale_y).round().max(0.0) as u16).min(height.saturating_sub(1) as u16);
+
+        // Compute hash
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        width.hash(&mut hasher);
+        height.hash(&mut hasher);
+        hot_x.hash(&mut hasher);
+        hot_y.hash(&mut hasher);
+        bgra_bottom_up.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        objc_autoreleasePoolPop(pool);
+
+        Some(MacCursorRaw {
+            width: width as u16,
+            height: height as u16,
+            hot_x,
+            hot_y,
+            bgra_bottom_up,
+            hash,
+        })
+    }
+}
+
+pub struct MacCursorTracker {
+    last_hash: Option<u64>,
+    cache_map: HashMap<u64, u16>,
+    next_cache_index: u16,
+    initial_sent: bool,
+}
+
+impl MacCursorTracker {
+    pub fn new() -> Self {
+        Self {
+            last_hash: None,
+            cache_map: HashMap::new(),
+            next_cache_index: 0,
+            initial_sent: false,
+        }
+    }
+
+    pub fn check_cursor(&mut self) -> Option<DisplayUpdate> {
+        let cursor_data = capture_macos_cursor()?;
+        let hash = cursor_data.hash;
+
+        if self.initial_sent && self.last_hash == Some(hash) {
+            return None;
+        }
+
+        self.last_hash = Some(hash);
+        self.initial_sent = true;
+
+        if let Some(&cached_idx) = self.cache_map.get(&hash) {
+            debug!(
+                "🖱️ [CURSOR] Switch to cached pointer (index: {}, hash: 0x{:016X})",
+                cached_idx, hash
+            );
+            return Some(DisplayUpdate::CachedPointer(cached_idx));
+        }
+
+        let cache_index = self.next_cache_index;
+        self.next_cache_index = (self.next_cache_index + 1) % 512;
+        self.cache_map.insert(hash, cache_index);
+
+        info!(
+            "🖱️ [CURSOR UPDATE] Emitting new 32bpp RGBA pointer ({}x{}, hot: {},{}, cache_index: {})",
+            cursor_data.width,
+            cursor_data.height,
+            cursor_data.hot_x,
+            cursor_data.hot_y,
+            cache_index
+        );
+
+        Some(DisplayUpdate::RGBAPointer(RGBAPointer {
+            cache_index,
+            width: cursor_data.width,
+            height: cursor_data.height,
+            hot_x: cursor_data.hot_x,
+            hot_y: cursor_data.hot_y,
+            data: cursor_data.bgra_bottom_up,
+        }))
+    }
+}
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
@@ -166,6 +443,8 @@ pub struct MacDisplayUpdates {
     interval: tokio::time::Interval,
     last_capture_error: bool,
     frame_count: u64,
+    cursor_tracker: MacCursorTracker,
+    pending_updates: VecDeque<DisplayUpdate>,
 }
 
 impl MacDisplayUpdates {
@@ -192,6 +471,8 @@ impl MacDisplayUpdates {
             interval,
             last_capture_error: false,
             frame_count: 0,
+            cursor_tracker: MacCursorTracker::new(),
+            pending_updates: VecDeque::with_capacity(4),
         })
     }
 
@@ -264,6 +545,11 @@ impl MacDisplayUpdates {
 #[async_trait::async_trait]
 impl RdpServerDisplayUpdates for MacDisplayUpdates {
     async fn next_update(&mut self) -> Result<Option<DisplayUpdate>> {
+        // 1. Trả về các gói update đang đợi trong hàng đợi nếu có
+        if let Some(update) = self.pending_updates.pop_front() {
+            return Ok(Some(update));
+        }
+
         if self.pending_resize {
             self.pending_resize = false;
             let target_w = self.target_width;
@@ -282,6 +568,12 @@ impl RdpServerDisplayUpdates for MacDisplayUpdates {
 
         self.interval.tick().await;
 
+        // 2. Kiểm tra cập nhật hình dạng con trỏ chuột (Mouse Cursor Shape)
+        if let Some(ptr_update) = self.cursor_tracker.check_cursor() {
+            self.pending_updates.push_back(ptr_update);
+        }
+
+        // 3. Chụp màn hình
         let display = self.display;
         let target_w = self.current_width;
         let target_h = self.current_height;
@@ -308,7 +600,8 @@ impl RdpServerDisplayUpdates for MacDisplayUpdates {
                     data: frame_bytes,
                 });
 
-                Ok(Some(update))
+                self.pending_updates.push_back(update);
+                Ok(self.pending_updates.pop_front())
             }
             Err(e) => {
                 if !self.last_capture_error {

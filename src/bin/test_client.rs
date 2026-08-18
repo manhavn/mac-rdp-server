@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
         license_cache: None,
         timezone_info: TimezoneInfo::default(),
         compression_type: None,
-        enable_server_pointer: false,
+        enable_server_pointer: true,
         pointer_software_rendering: true,
         multitransport_flags: None,
     };
@@ -213,6 +213,32 @@ async fn main() -> Result<()> {
                                         }
                                     }
                                 }
+                            }
+                        } else if update_pdu.update_code == UpdateCode::NewPointer {
+                            let mut ptr_cursor = ReadCursor::new(update_pdu.data);
+                            if let Ok(ptr) = decode_cursor::<
+                                ironrdp_pdu::pointer::PointerAttribute<'_>,
+                            >(&mut ptr_cursor)
+                            {
+                                println!(
+                                    "🖱️ [CLIENT RECEIVED POINTER] 32bpp NewPointer: {}x{}, hotspot=({}, {}), data_len={}",
+                                    ptr.color_pointer.width,
+                                    ptr.color_pointer.height,
+                                    ptr.color_pointer.hot_spot.x,
+                                    ptr.color_pointer.hot_spot.y,
+                                    ptr.color_pointer.xor_mask.len(),
+                                );
+                            }
+                        } else if update_pdu.update_code == UpdateCode::CachedPointer {
+                            let mut ptr_cursor = ReadCursor::new(update_pdu.data);
+                            if let Ok(ptr) = decode_cursor::<
+                                ironrdp_pdu::pointer::CachedPointerAttribute,
+                            >(&mut ptr_cursor)
+                            {
+                                println!(
+                                    "🖱️ [CLIENT RECEIVED POINTER] CachedPointer (cache_index: {})",
+                                    ptr.cache_index,
+                                );
                             }
                         } else if update_pdu.update_code == UpdateCode::SurfaceCommands {
                             match update_pdu.fragmentation {
