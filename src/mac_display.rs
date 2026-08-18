@@ -115,24 +115,26 @@ impl RdpServerDisplay for MacDisplay {
     }
 
     async fn request_initial_size(&mut self, client_size: DesktopSize) -> DesktopSize {
-        if client_size.width >= 320 && client_size.height >= 240 {
-            let client_w = (client_size.width / 4) * 4;
-            let client_h = (client_size.height / 4) * 4;
+        if client_size.width != self.rdp_width || client_size.height != self.rdp_height {
             info!(
-                "🖥️ [DISPLAY SYNC] Client Canvas: {}x{}, Mac Native: {}x{}",
-                client_size.width,
-                client_size.height,
-                self.mac_logical_width,
-                self.mac_logical_height
+                "🖥️ [DISPLAY NEGOTIATION] Client requested {}x{}, but server strictly enforces {}x{} (Server Frame)",
+                client_size.width, client_size.height, self.rdp_width, self.rdp_height
             );
-            self.rdp_width = client_w;
-            self.rdp_height = client_h;
-            self.target_width = client_w;
-            self.target_height = client_h;
+            self.needs_reactivation_resize = true;
+        } else {
+            info!(
+                "🖥️ [DISPLAY SYNC] Client Canvas matches server frame: {}x{}",
+                self.rdp_width, self.rdp_height
+            );
             self.needs_reactivation_resize = false;
-            self.shared_rdp_w.store(client_w as u32, Ordering::Relaxed);
-            self.shared_rdp_h.store(client_h as u32, Ordering::Relaxed);
         }
+        self.target_width = self.rdp_width;
+        self.target_height = self.rdp_height;
+        self.shared_rdp_w
+            .store(self.rdp_width as u32, Ordering::Relaxed);
+        self.shared_rdp_h
+            .store(self.rdp_height as u32, Ordering::Relaxed);
+
         DesktopSize {
             width: self.rdp_width,
             height: self.rdp_height,
@@ -269,7 +271,7 @@ impl RdpServerDisplayUpdates for MacDisplayUpdates {
             self.current_width = target_w;
             self.current_height = target_h;
             info!(
-                "🚀 [AUTO-RESOLUTION] Remmina connected -> Emitting Deactivation-Reactivation Resize to {}x{}",
+                "🚀 [ENFORCE RESOLUTION] Emitting Deactivation-Reactivation Resize to {}x{} to force client conformance",
                 target_w, target_h
             );
             return Ok(Some(DisplayUpdate::Resize(DesktopSize {
