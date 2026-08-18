@@ -82,7 +82,7 @@ You can configure the server using either **trailing CLI options** (recommended)
 | `-H`, `--host` | `RDP_HOST` | IPv4 address | `0.0.0.0` | Listening host interface |
 | `-c`, `--color` | `RDP_COLOR` | `4bit`, `5bit`, `6bit`, `8bit` | `6bit` | Color depth (4bit: max throughput, 6bit: crisp UI, 8bit: lossless) |
 | `-t`, `--tile` | `RDP_TILE` | `320x24`, `320x32`, `240x24` | `320x24` | Tile grid transmission dimensions |
-| `-f`, `--fps` | `RDP_FPS` | `30`, `60`, `120` | `60` | Maximum capture and mouse sampling FPS |
+| `-f`, `--fps` | `RDP_FPS` | `30`, `60`, `120` | `30` | Maximum capture and mouse sampling FPS |
 | `-r`, `--res` | `RDP_RES` | `native`, `1080p`, `720p` | `native` | Output canvas resolution (`720p` for ultra-low bandwidth) |
 | `-m`, `--mode` | `RDP_MODE` | `speed`, `balanced`, `quality` | `speed` | Performance profile preset |
 | `-d`, `--daemon` | - | Flag | - | Run server in background |

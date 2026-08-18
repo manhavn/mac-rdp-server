@@ -58,12 +58,12 @@ impl MacDisplay {
         let mac_w = display.pixels_wide() as u16;
         let mac_h = display.pixels_high() as u16;
 
-        // Tần số chụp màn hình gốc (Mặc định: 60 FPS cho phản hồi chuột & phím tức thì)
+        // Tần số chụp màn hình gốc (Mặc định: 30 FPS)
         let fps = std::env::var("RDP_FPS")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(60)
-            .clamp(1, 60);
+            .unwrap_or(30)
+            .clamp(1, 120);
 
         // Mặc định: Dùng chính xác 100% độ phân giải thật của màn hình Mac (1920x1080 Native)
         let res_env = std::env::var("RDP_RES").unwrap_or_else(|_| "native".to_string());
@@ -178,7 +178,7 @@ impl MacDisplayUpdates {
         fps: u32,
     ) -> Result<Self> {
         let display = CGDisplay::main();
-        let interval_ms = (1000 / fps.max(1)).max(16) as u64;
+        let interval_ms = (1000 / fps.max(1)).max(8) as u64;
         let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 

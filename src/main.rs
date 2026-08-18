@@ -212,7 +212,7 @@ fn print_help() {
     println!(
         "  -t, --tile <WIDTHxHEIGHT>   Tile grid size: 320x24, 320x32, etc. [default: 320x24]"
     );
-    println!("  -f, --fps <FPS>             Maximum capture FPS [default: 60]");
+    println!("  -f, --fps <FPS>             Maximum capture FPS [default: 30]");
     println!("  -r, --res <RES>             Resolution: native, 1080p, 720p [default: native]");
     println!(
         "  -m, --mode <MODE>           Profile preset: speed, quality, balanced [default: speed]"
@@ -252,7 +252,7 @@ fn parse_cli_args() -> CliConfig {
     let mut fps: u32 = std::env::var("RDP_FPS")
         .ok()
         .and_then(|f| f.parse().ok())
-        .unwrap_or(60);
+        .unwrap_or(30);
     let mut res = std::env::var("RDP_RES").unwrap_or_else(|_| "native".to_string());
     let mut mode = std::env::var("RDP_MODE").unwrap_or_else(|_| "speed".to_string());
     let mut no_log = std::env::var("RDP_NO_LOG")
@@ -566,7 +566,7 @@ async fn main() -> Result<()> {
         cli.color
     );
     info!(
-        "   - Tần số quét: {} FPS (Chụp liên tục 60 FPS để chuột & gõ phím mượt 100%)",
+        "   - Tần số quét: {} FPS (Chụp liên tục mượt mà, tiết kiệm tài nguyên)",
         cli.fps
     );
     info!("============================================================");

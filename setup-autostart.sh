@@ -18,7 +18,7 @@ DOMAIN="${RDP_DOMAIN:-}"
 PORT="${RDP_PORT:-3389}"
 COLOR="${RDP_COLOR:-6bit}"
 TILE="${RDP_TILE:-320x24}"
-FPS="${RDP_FPS:-60}"
+FPS="${RDP_FPS:-30}"
 NO_LOG="${RDP_NO_LOG:-0}"
 
 # Xử lý các tham số dòng lệnh truyền vào setup-autostart.sh
@@ -66,7 +66,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -P, --port <PORT>           Cổng kết nối RDP (mặc định: 3389)"
             echo "  -c, --color <DEPTH>         Mức nén màu: 4bit, 5bit, 6bit, 8bit (mặc định: 6bit)"
             echo "  -t, --tile <SIZE>           Kích thước ô gạch: 320x24, 320x32 (mặc định: 320x24)"
-            echo "  -f, --fps <FPS>             Tần số quét màn hình (mặc định: 60)"
+            echo "  -f, --fps <FPS>             Tần số quét màn hình (mặc định: 30)"
             echo "  -nl, --no-log               Tắt toàn bộ log"
             echo "  -h, --help                  Xem hướng dẫn"
             echo ""

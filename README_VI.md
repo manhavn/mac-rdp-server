@@ -82,7 +82,7 @@ Bạn có thể truyền cấu hình trực tiếp qua **tham số dòng lệnh 
 | `-H`, `--host` | `RDP_HOST` | Địa chỉ IP | `0.0.0.0` | Địa chỉ mạng lắng nghe |
 | `-c`, `--color` | `RDP_COLOR` | `4bit`, `5bit`, `6bit`, `8bit` | `6bit` | Mức nén & độ sâu màu (4bit: siêu nhẹ, 6bit: sắc nét, 8bit: lossless) |
 | `-t`, `--tile` | `RDP_TILE` | `320x24`, `320x32`, `240x24` | `320x24` | Kích thước ô gạch truyền tải |
-| `-f`, `--fps` | `RDP_FPS` | `30`, `60`, `120` | `60` | Tần số quét màn hình tối đa cho chuột & bàn phím |
+| `-f`, `--fps` | `RDP_FPS` | `30`, `60`, `120` | `30` | Tần số quét màn hình tối đa cho chuột & bàn phím |
 | `-r`, `--res` | `RDP_RES` | `native`, `1080p`, `720p` | `native` | Độ phân giải hiển thị RDP (`720p` giúp siêu nhẹ) |
 | `-m`, `--mode` | `RDP_MODE` | `speed`, `balanced`, `quality` | `speed` | Profile cấu hình tổng thể |
 | `-d`, `--daemon` | - | Cờ bật | - | Chạy server ngầm trong nền |
