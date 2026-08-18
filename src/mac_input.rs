@@ -78,10 +78,10 @@ const K_CG_SCROLL_EVENT_UNIT_LINE: u32 = 1;
 
 // CoreGraphics Modifier Flag Masks
 pub const K_CG_EVENT_FLAG_MASK_ALPHA_SHIFT: u64 = 0x0001_0000; // Caps Lock
-pub const K_CG_EVENT_FLAG_MASK_SHIFT: u64 = 0x0002_0000;       // Shift
-pub const K_CG_EVENT_FLAG_MASK_CONTROL: u64 = 0x0004_0000;     // Control
-pub const K_CG_EVENT_FLAG_MASK_ALTERNATE: u64 = 0x0008_0000;   // Option / Alt
-pub const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;     // Command (Win)
+pub const K_CG_EVENT_FLAG_MASK_SHIFT: u64 = 0x0002_0000; // Shift
+pub const K_CG_EVENT_FLAG_MASK_CONTROL: u64 = 0x0004_0000; // Control
+pub const K_CG_EVENT_FLAG_MASK_ALTERNATE: u64 = 0x0008_0000; // Option / Alt
+pub const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000; // Command (Win)
 pub const K_CG_EVENT_FLAG_MASK_NUMERIC_PAD: u64 = 0x0020_0000; // Numeric Pad
 #[allow(dead_code)]
 pub const K_CG_EVENT_FLAG_MASK_HELP: u64 = 0x0040_0000; // Help
@@ -146,8 +146,7 @@ impl MacInputHandler {
             rdp_w, rdp_h, mac_w, mac_h, scale_x, scale_y
         );
 
-        let pressed_keys: Arc<Mutex<HashMap<u16, KeyState>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let pressed_keys: Arc<Mutex<HashMap<u16, KeyState>>> = Arc::new(Mutex::new(HashMap::new()));
         let last_global_input = Arc::new(AtomicU64::new(current_timestamp_ms()));
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
@@ -259,7 +258,9 @@ impl MacInputHandler {
             }
         });
 
-        info!("🛡️ Key Stuck Watchdog & Auto-Release Protection: ACTIVATED (Auto-releases stuck keys after timeout)");
+        info!(
+            "🛡️ Key Stuck Watchdog & Auto-Release Protection: ACTIVATED (Auto-releases stuck keys after timeout)"
+        );
 
         Self {
             current_x: AtomicI32::new(0),
@@ -403,8 +404,8 @@ impl MacInputHandler {
             || self.left_cmd.load(Ordering::Relaxed)
             || self.right_cmd.load(Ordering::Relaxed);
 
-        let is_shift = self.left_shift.load(Ordering::Relaxed)
-            || self.right_shift.load(Ordering::Relaxed);
+        let is_shift =
+            self.left_shift.load(Ordering::Relaxed) || self.right_shift.load(Ordering::Relaxed);
 
         // Chỉ đính kèm Unicode cho các dấu câu khi KHÔNG giữ Cmd/Ctrl/Alt để không làm hỏng phím tắt Alt/Cmd/Ctrl và bộ gõ tiếng Việt
         let unicode_char = get_unicode_override(keycode, is_shift, has_cmd_ctrl_alt);
@@ -722,8 +723,23 @@ fn get_unicode_override(mac_key: u16, shift: bool, has_modifiers: bool) -> Optio
 pub fn is_numpad_key(mac_key: u16) -> bool {
     matches!(
         mac_key,
-        0x41 | 0x43 | 0x45 | 0x47 | 0x4B | 0x4C | 0x4E | 0x51 | 0x52 | 0x53 | 0x54 | 0x55
-            | 0x56 | 0x57 | 0x58 | 0x59 | 0x5B | 0x5C
+        0x41 | 0x43
+            | 0x45
+            | 0x47
+            | 0x4B
+            | 0x4C
+            | 0x4E
+            | 0x51
+            | 0x52
+            | 0x53
+            | 0x54
+            | 0x55
+            | 0x56
+            | 0x57
+            | 0x58
+            | 0x59
+            | 0x5B
+            | 0x5C
     )
 }
 
