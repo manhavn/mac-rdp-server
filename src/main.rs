@@ -590,6 +590,7 @@ async fn main() -> Result<()> {
         .with_tls(tls_acceptor)
         .with_input_handler(input_handler)
         .with_display_handler(display_handler)
+        .with_honor_client_desktop_size(true)
         .with_max_request_size(8 * 1024 * 1024) // 8 MB buffer (Standard MS-RDPBCGR limit)
         .with_bitmap_codecs(codecs)
         .build();

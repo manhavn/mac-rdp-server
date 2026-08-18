@@ -37,9 +37,12 @@ pub fn check_screen_recording_permission() -> bool {
 pub struct MacDisplay {
     pub rdp_width: u16,
     pub rdp_height: u16,
+    pub target_width: u16,
+    pub target_height: u16,
     pub mac_logical_width: u16,
     pub mac_logical_height: u16,
     pub fps: u32,
+    pub needs_reactivation_resize: bool,
 }
 
 impl MacDisplay {
@@ -86,9 +89,12 @@ impl MacDisplay {
         Ok(Self {
             rdp_width,
             rdp_height,
+            target_width: rdp_width,
+            target_height: rdp_height,
             mac_logical_width: mac_w,
             mac_logical_height: mac_h,
             fps,
+            needs_reactivation_resize: false,
         })
     }
 }
@@ -104,12 +110,21 @@ impl RdpServerDisplay for MacDisplay {
 
     async fn request_initial_size(&mut self, client_size: DesktopSize) -> DesktopSize {
         if client_size.width >= 320 && client_size.height >= 240 {
-            self.rdp_width = (client_size.width / 4) * 4;
-            self.rdp_height = (client_size.height / 4) * 4;
+            let client_w = (client_size.width / 4) * 4;
+            let client_h = (client_size.height / 4) * 4;
             info!(
-                "🖥️ [DISPLAY SYNC] Client Canvas: {}x{}, Server Framebuffer: {}x{}",
-                client_size.width, client_size.height, self.rdp_width, self.rdp_height
+                "🖥️ [DISPLAY SYNC] Client Canvas: {}x{}, Native Target: {}x{}",
+                client_size.width, client_size.height, self.target_width, self.target_height
             );
+            if client_w != self.target_width || client_h != self.target_height {
+                self.rdp_width = client_w;
+                self.rdp_height = client_h;
+                self.needs_reactivation_resize = true;
+            } else {
+                self.rdp_width = self.target_width;
+                self.rdp_height = self.target_height;
+                self.needs_reactivation_resize = false;
+            }
         }
         DesktopSize {
             width: self.rdp_width,
@@ -118,22 +133,41 @@ impl RdpServerDisplay for MacDisplay {
     }
 
     async fn updates(&mut self) -> Result<Box<dyn RdpServerDisplayUpdates>> {
-        let updates = MacDisplayUpdates::new(self.rdp_width, self.rdp_height, self.fps)?;
+        let trigger_resize = self.needs_reactivation_resize;
+        self.needs_reactivation_resize = false;
+        let updates = MacDisplayUpdates::new(
+            self.rdp_width,
+            self.rdp_height,
+            self.target_width,
+            self.target_height,
+            trigger_resize,
+            self.fps,
+        )?;
         Ok(Box::new(updates))
     }
 }
 
 pub struct MacDisplayUpdates {
     display: CGDisplay,
+    current_width: u16,
+    current_height: u16,
     target_width: u16,
     target_height: u16,
+    pending_resize: bool,
     interval: tokio::time::Interval,
     last_capture_error: bool,
     frame_count: u64,
 }
 
 impl MacDisplayUpdates {
-    pub fn new(target_width: u16, target_height: u16, fps: u32) -> Result<Self> {
+    pub fn new(
+        current_width: u16,
+        current_height: u16,
+        target_width: u16,
+        target_height: u16,
+        pending_resize: bool,
+        fps: u32,
+    ) -> Result<Self> {
         let display = CGDisplay::main();
         let interval_ms = (1000 / fps.max(1)).max(16) as u64;
         let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
@@ -141,8 +175,11 @@ impl MacDisplayUpdates {
 
         Ok(Self {
             display,
+            current_width,
+            current_height,
             target_width,
             target_height,
+            pending_resize,
             interval,
             last_capture_error: false,
             frame_count: 0,
@@ -209,11 +246,27 @@ impl MacDisplayUpdates {
 #[async_trait::async_trait]
 impl RdpServerDisplayUpdates for MacDisplayUpdates {
     async fn next_update(&mut self) -> Result<Option<DisplayUpdate>> {
+        if self.pending_resize {
+            self.pending_resize = false;
+            let target_w = self.target_width;
+            let target_h = self.target_height;
+            self.current_width = target_w;
+            self.current_height = target_h;
+            info!(
+                "🚀 [AUTO-RESOLUTION] Remmina connected -> Emitting Deactivation-Reactivation Resize to {}x{}",
+                target_w, target_h
+            );
+            return Ok(Some(DisplayUpdate::Resize(DesktopSize {
+                width: target_w,
+                height: target_h,
+            })));
+        }
+
         self.interval.tick().await;
 
         let display = self.display;
-        let target_w = self.target_width;
-        let target_h = self.target_height;
+        let target_w = self.current_width;
+        let target_h = self.current_height;
 
         let capture_res =
             tokio::task::spawn_blocking(move || Self::process_frame(&display, target_w, target_h))
