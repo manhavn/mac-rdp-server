@@ -45,7 +45,7 @@ fn ensure_tls_certificate(cert_path: &Path, key_path: &Path) -> Result<TlsAccept
         .context("Failed to create TLS acceptor")
 }
 
-/// Tối ưu hóa UI macOS: Vô hiệu hóa hiệu ứng zoom/resize animation để cửa sổ mở và phóng to tức thì
+/// Tối ưu hóa UI macOS: Vô hiệu hóa hiệu ứng zoom/resize animation, bóng mờ transparency và smooth scroll để phản hồi tức thì
 fn optimize_macos_animations() {
     let _ = std::process::Command::new("defaults")
         .args(&[
@@ -58,6 +58,33 @@ fn optimize_macos_animations() {
         .status();
     let _ = std::process::Command::new("defaults")
         .args(&["write", "-g", "NSWindowResizeTime", "-float", "0.001"])
+        .status();
+    let _ = std::process::Command::new("defaults")
+        .args(&[
+            "write",
+            "-g",
+            "NSScrollAnimationEnabled",
+            "-bool",
+            "false",
+        ])
+        .status();
+    let _ = std::process::Command::new("defaults")
+        .args(&[
+            "write",
+            "-g",
+            "NSScrollViewRubberbanding",
+            "-bool",
+            "false",
+        ])
+        .status();
+    let _ = std::process::Command::new("defaults")
+        .args(&[
+            "write",
+            "-g",
+            "AppleReduceDesktopTinting",
+            "-bool",
+            "true",
+        ])
         .status();
     let _ = std::process::Command::new("defaults")
         .args(&[
@@ -90,7 +117,7 @@ fn optimize_macos_animations() {
         .args(&["write", "-g", "QLPanelAnimationDuration", "-float", "0.001"])
         .status();
     info!(
-        "⚡ [MACOS OPTIMIZATION] UI Animations and window zoom delays disabled for instant response"
+        "⚡ [MACOS OPTIMIZATION] UI Animations, transparency & smooth-scroll delays disabled for instant response"
     );
 }
 
@@ -592,8 +619,8 @@ async fn main() -> Result<()> {
         display_handler.mac_logical_height,
     );
 
-    // Cấu hình Codec Capabilities chuẩn (FastPath Bitmap RDP6 Planar RLE)
-    let codecs = ironrdp::pdu::rdp::capability_sets::BitmapCodecs(vec![]);
+    let codecs = ironrdp::pdu::rdp::capability_sets::server_codecs_capabilities(&["rfx", "nscodec"])
+        .unwrap_or_else(|_| ironrdp::pdu::rdp::capability_sets::BitmapCodecs(vec![]));
 
     // Xây dựng RDP Server
     let mut server = RdpServer::builder()
