@@ -211,33 +211,40 @@ impl MacDisplayUpdates {
             raw[..copy_len].to_vec()
         } else if src_w == dst_w * 2 && src_h == dst_h * 2 {
             let mut bgra = vec![0u8; expected_len];
-            let src_stride = src_w * 4;
+            let src_u32 = unsafe {
+                std::slice::from_raw_parts(raw.as_ptr() as *const u32, raw.len() / 4)
+            };
+            let dst_u32 = unsafe {
+                std::slice::from_raw_parts_mut(bgra.as_mut_ptr() as *mut u32, expected_len / 4)
+            };
             for y in 0..dst_h {
-                let src_row = (y * 2) * src_stride;
-                let dst_row = y * dst_stride;
+                let src_row = (y * 2) * src_w;
+                let dst_row = y * dst_w;
                 for x in 0..dst_w {
-                    let src_px = src_row + (x * 2) * 4;
-                    let dst_px = dst_row + x * 4;
-                    bgra[dst_px..dst_px + 4].copy_from_slice(&raw[src_px..src_px + 4]);
+                    dst_u32[dst_row + x] = src_u32[src_row + (x * 2)];
                 }
             }
             bgra
         } else {
             let mut bgra = vec![0u8; expected_len];
-            let src_stride = cg_img.bytes_per_row();
+            let src_u32 = unsafe {
+                std::slice::from_raw_parts(raw.as_ptr() as *const u32, raw.len() / 4)
+            };
+            let dst_u32 = unsafe {
+                std::slice::from_raw_parts_mut(bgra.as_mut_ptr() as *mut u32, expected_len / 4)
+            };
+            let src_stride_u32 = cg_img.bytes_per_row() / 4;
             let x_ratio = ((src_w as u64) << 16) / (dst_w as u64);
             let y_ratio = ((src_h as u64) << 16) / (dst_h as u64);
 
             for y in 0..dst_h {
                 let src_y = (((y as u64 * y_ratio) >> 16) as usize).min(src_h - 1);
-                let src_row = src_y * src_stride;
-                let dst_row = y * dst_stride;
+                let src_row = src_y * src_stride_u32;
+                let dst_row = y * dst_w;
 
                 for x in 0..dst_w {
                     let src_x = (((x as u64 * x_ratio) >> 16) as usize).min(src_w - 1);
-                    let src_px = src_row + src_x * 4;
-                    let dst_px = dst_row + x * 4;
-                    bgra[dst_px..dst_px + 4].copy_from_slice(&raw[src_px..src_px + 4]);
+                    dst_u32[dst_row + x] = src_u32[src_row + src_x];
                 }
             }
             bgra

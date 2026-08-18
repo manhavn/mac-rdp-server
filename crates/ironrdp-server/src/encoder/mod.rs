@@ -4,7 +4,7 @@ use core::num::NonZeroU16;
 use anyhow::{Context as _, Result, anyhow};
 use ironrdp_acceptor::DesktopSize;
 use ironrdp_core::{Encode as _, WriteCursor};
-use ironrdp_graphics::diff::{Rect, find_different_rects_sub};
+use ironrdp_graphics::diff::Rect;
 use ironrdp_pdu::bitmap::{BitmapData, BitmapUpdateData, Compression};
 use ironrdp_pdu::encode_vec;
 use ironrdp_pdu::fast_path::UpdateCode;
@@ -305,70 +305,79 @@ impl UpdateEncoder {
         // Từ Frame 2 trở đi kích hoạt 100% High-Performance Delta Diffing (0 KB/s khi tĩnh, <1-5 KB khi có chuyển động)
         let force_full_screen = self.frame_count <= 1;
 
-        let diffs = if !force_full_screen && self.framebuffer.is_some() {
-            let Framebuffer {
-                data,
-                stride,
-                width,
-                height,
-                ..
-            } = self.framebuffer.as_ref().unwrap();
-
-            find_different_rects_sub::<4>(
-                data,
-                *stride,
-                width.get().into(),
-                height.get().into(),
-                &bitmap.data,
-                bitmap.stride.get(),
-                bitmap.width.get().into(),
-                bitmap.height.get().into(),
-                bitmap.x.into(),
-                bitmap.y.into(),
-            )
-        } else {
-            vec![Rect {
-                x: 0,
-                y: 0,
-                width: bitmap.width.get().into(),
-                height: bitmap.height.get().into(),
-            }]
-        };
-
         let full_width = usize::from(bitmap.width.get());
         let full_height = usize::from(bitmap.height.get());
         let (_mask, tile_w, tile_h) = get_compression_mode();
         let cols = (full_width + tile_w - 1) / tile_w;
         let rows = (full_height + tile_h - 1) / tile_h;
-        let mut dirty_tiles = vec![false; cols * rows];
-
-        for rect in diffs {
-            let start_col = rect.x / tile_w;
-            let end_col = ((rect.x + rect.width + tile_w - 1) / tile_w).min(cols);
-            let start_row = rect.y / tile_h;
-            let end_row = ((rect.y + rect.height + tile_h - 1) / tile_h).min(rows);
-
-            for r in start_row..end_row {
-                for c in start_col..end_col {
-                    dirty_tiles[r * cols + c] = true;
-                }
-            }
-        }
 
         let mut tiles = Vec::new();
-        for r in 0..rows {
-            for c in 0..cols {
-                if dirty_tiles[r * cols + c] {
+
+        if force_full_screen || self.framebuffer.is_none() {
+            for r in 0..rows {
+                let y = r * tile_h;
+                let h = (full_height - y).min(tile_h);
+                for c in 0..cols {
                     let x = c * tile_w;
-                    let y = r * tile_h;
                     let w = (full_width - x).min(tile_w);
-                    let h = (full_height - y).min(tile_h);
                     tiles.push(Rect {
                         x,
                         y,
                         width: w,
                         height: h,
                     });
+                }
+            }
+        } else {
+            let Framebuffer {
+                data: old_data,
+                stride: old_stride,
+                ..
+            } = self.framebuffer.as_ref().unwrap();
+
+            let new_data = &bitmap.data;
+            let new_stride = bitmap.stride.get();
+
+            for r in 0..rows {
+                let y = r * tile_h;
+                let h = (full_height - y).min(tile_h);
+
+                for c in 0..cols {
+                    let x = c * tile_w;
+                    let w = (full_width - x).min(tile_w);
+                    let bytes_per_row = w * 4;
+                    let x_offset = x * 4;
+
+                    let mut tile_dirty = false;
+                    for row_idx in 0..h {
+                        let curr_y = y + row_idx;
+                        let old_start = curr_y * old_stride + x_offset;
+                        let new_start = curr_y * new_stride + x_offset;
+
+                        if old_start + bytes_per_row <= old_data.len()
+                            && new_start + bytes_per_row <= new_data.len()
+                        {
+                            // SIMD vector memcmp so sánh phần cứng siêu tốc (< 0.05ms)
+                            if old_data[old_start..old_start + bytes_per_row]
+                                != new_data[new_start..new_start + bytes_per_row]
+                            {
+                                tile_dirty = true;
+                                break;
+                            }
+                        } else {
+                            tile_dirty = true;
+                            break;
+                        }
+                    }
+
+                    if tile_dirty {
+                        tiles.push(Rect {
+                            x,
+                            y,
+                            width: w,
+                            height: h,
+                        });
+                    }
                 }
             }
         }
