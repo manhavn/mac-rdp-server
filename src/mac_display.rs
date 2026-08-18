@@ -211,9 +211,8 @@ impl MacDisplayUpdates {
             raw[..copy_len].to_vec()
         } else if src_w == dst_w * 2 && src_h == dst_h * 2 {
             let mut bgra = vec![0u8; expected_len];
-            let src_u32 = unsafe {
-                std::slice::from_raw_parts(raw.as_ptr() as *const u32, raw.len() / 4)
-            };
+            let src_u32 =
+                unsafe { std::slice::from_raw_parts(raw.as_ptr() as *const u32, raw.len() / 4) };
             let dst_u32 = unsafe {
                 std::slice::from_raw_parts_mut(bgra.as_mut_ptr() as *mut u32, expected_len / 4)
             };
@@ -227,9 +226,8 @@ impl MacDisplayUpdates {
             bgra
         } else {
             let mut bgra = vec![0u8; expected_len];
-            let src_u32 = unsafe {
-                std::slice::from_raw_parts(raw.as_ptr() as *const u32, raw.len() / 4)
-            };
+            let src_u32 =
+                unsafe { std::slice::from_raw_parts(raw.as_ptr() as *const u32, raw.len() / 4) };
             let dst_u32 = unsafe {
                 std::slice::from_raw_parts_mut(bgra.as_mut_ptr() as *mut u32, expected_len / 4)
             };

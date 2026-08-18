@@ -60,31 +60,13 @@ fn optimize_macos_animations() {
         .args(&["write", "-g", "NSWindowResizeTime", "-float", "0.001"])
         .status();
     let _ = std::process::Command::new("defaults")
-        .args(&[
-            "write",
-            "-g",
-            "NSScrollAnimationEnabled",
-            "-bool",
-            "false",
-        ])
+        .args(&["write", "-g", "NSScrollAnimationEnabled", "-bool", "false"])
         .status();
     let _ = std::process::Command::new("defaults")
-        .args(&[
-            "write",
-            "-g",
-            "NSScrollViewRubberbanding",
-            "-bool",
-            "false",
-        ])
+        .args(&["write", "-g", "NSScrollViewRubberbanding", "-bool", "false"])
         .status();
     let _ = std::process::Command::new("defaults")
-        .args(&[
-            "write",
-            "-g",
-            "AppleReduceDesktopTinting",
-            "-bool",
-            "true",
-        ])
+        .args(&["write", "-g", "AppleReduceDesktopTinting", "-bool", "true"])
         .status();
     let _ = std::process::Command::new("defaults")
         .args(&[
@@ -619,8 +601,9 @@ async fn main() -> Result<()> {
         display_handler.mac_logical_height,
     );
 
-    let codecs = ironrdp::pdu::rdp::capability_sets::server_codecs_capabilities(&["rfx", "nscodec"])
-        .unwrap_or_else(|_| ironrdp::pdu::rdp::capability_sets::BitmapCodecs(vec![]));
+    let codecs =
+        ironrdp::pdu::rdp::capability_sets::server_codecs_capabilities(&["rfx", "nscodec"])
+            .unwrap_or_else(|_| ironrdp::pdu::rdp::capability_sets::BitmapCodecs(vec![]));
 
     // Xây dựng RDP Server
     let mut server = RdpServer::builder()

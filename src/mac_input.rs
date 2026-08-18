@@ -36,6 +36,7 @@ unsafe extern "C" {
         wheelCount: u32,
         wheel1: i32,
         wheel2: i32,
+        wheel3: i32,
     ) -> *mut std::ffi::c_void;
 
     fn CGEventKeyboardSetUnicodeString(
@@ -47,6 +48,8 @@ unsafe extern "C" {
     fn CGEventSetFlags(event: *mut std::ffi::c_void, flags: u64);
     #[allow(dead_code)]
     fn CGEventGetFlags(event: *mut std::ffi::c_void) -> u64;
+
+    fn CGEventSetIntegerValueField(event: *mut std::ffi::c_void, field: u32, value: i64);
 
     fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
     fn CFRelease(cf: *const std::ffi::c_void);
@@ -69,6 +72,11 @@ const K_CG_EVENT_OTHER_MOUSE_DRAGGED: u32 = 27;
 const K_CG_MOUSE_BUTTON_LEFT: u32 = 0;
 const K_CG_MOUSE_BUTTON_RIGHT: u32 = 1;
 const K_CG_MOUSE_BUTTON_CENTER: u32 = 2;
+const K_CG_MOUSE_BUTTON_4: u32 = 3;
+const K_CG_MOUSE_BUTTON_5: u32 = 4;
+
+// Mouse event field constants
+const K_CG_MOUSE_EVENT_BUTTON_NUMBER: u32 = 3;
 
 // Tap Location
 const K_CG_HID_EVENT_TAP: u32 = 0;
@@ -109,6 +117,9 @@ pub struct MacInputHandler {
     left_down: AtomicBool,
     right_down: AtomicBool,
     middle_down: AtomicBool,
+    button4_down: AtomicBool,
+    button5_down: AtomicBool,
+    scroll_accumulator: Mutex<(f64, f64)>, // (vertical dy, horizontal dx)
     scale_x: f64,
     scale_y: f64,
     pressed_keys: Arc<Mutex<HashMap<u16, KeyState>>>,
@@ -268,6 +279,9 @@ impl MacInputHandler {
             left_down: AtomicBool::new(false),
             right_down: AtomicBool::new(false),
             middle_down: AtomicBool::new(false),
+            button4_down: AtomicBool::new(false),
+            button5_down: AtomicBool::new(false),
+            scroll_accumulator: Mutex::new((0.0, 0.0)),
             scale_x,
             scale_y,
             pressed_keys,
@@ -316,6 +330,13 @@ impl MacInputHandler {
             let point = CGPoint { x, y };
             let event = CGEventCreateMouseEvent(std::ptr::null(), event_type, point, button);
             if !event.is_null() {
+                if button >= 3 {
+                    CGEventSetIntegerValueField(
+                        event,
+                        K_CG_MOUSE_EVENT_BUTTON_NUMBER,
+                        button as i64,
+                    );
+                }
                 CGEventPost(K_CG_HID_EVENT_TAP, event);
                 CFRelease(event);
             }
@@ -327,20 +348,58 @@ impl MacInputHandler {
         Self::post_mouse_event_raw(event_type, button, x, y);
     }
 
-    fn post_scroll_event(&self, lines: i32) {
+    fn post_scroll_event(&self, dy_lines: i32, dx_lines: i32) {
         self.update_activity();
+        let flags = self.current_modifier_flags();
         unsafe {
             let event = CGEventCreateScrollWheelEvent2(
                 std::ptr::null(),
                 K_CG_SCROLL_EVENT_UNIT_LINE,
-                1,
-                lines,
+                2,
+                dy_lines,
+                dx_lines,
                 0,
             );
             if !event.is_null() {
+                CGEventSetFlags(event, flags);
                 CGEventPost(K_CG_HID_EVENT_TAP, event);
                 CFRelease(event);
             }
+        }
+    }
+
+    fn scroll_accum(&self, dy_raw: f64, dx_raw: f64) {
+        let (dy_lines, dx_lines) = {
+            let mut accum = self.scroll_accumulator.lock().unwrap();
+            accum.0 += dy_raw / 30.0;
+            accum.1 += dx_raw / 30.0;
+
+            let mut dy = accum.0.trunc() as i32;
+            let mut dx = accum.1.trunc() as i32;
+
+            if dy == 0 && dy_raw != 0.0 && accum.0.abs() >= 0.25 {
+                dy = if accum.0 > 0.0 { 1 } else { -1 };
+                accum.0 -= dy as f64;
+            } else {
+                accum.0 -= dy as f64;
+            }
+
+            if dx == 0 && dx_raw != 0.0 && accum.1.abs() >= 0.25 {
+                dx = if accum.1 > 0.0 { 1 } else { -1 };
+                accum.1 -= dx as f64;
+            } else {
+                accum.1 -= dx as f64;
+            }
+
+            (dy, dx)
+        };
+
+        if dy_lines != 0 || dx_lines != 0 {
+            debug!(
+                "📜 [SCROLL] dy: {}, dx: {} (raw dy: {}, dx: {})",
+                dy_lines, dx_lines, dy_raw, dx_raw
+            );
+            self.post_scroll_event(dy_lines, dx_lines);
         }
     }
 
@@ -491,6 +550,14 @@ impl Drop for MacInputHandler {
             info!("🧹 [SESSION CLEANUP] Tự động nhả chuột giữa");
             Self::post_mouse_event_raw(K_CG_EVENT_OTHER_MOUSE_UP, K_CG_MOUSE_BUTTON_CENTER, x, y);
         }
+        if self.button4_down.swap(false, Ordering::Relaxed) {
+            info!("🧹 [SESSION CLEANUP] Tự động nhả nút chuột 4 (Back)");
+            Self::post_mouse_event_raw(K_CG_EVENT_OTHER_MOUSE_UP, K_CG_MOUSE_BUTTON_4, x, y);
+        }
+        if self.button5_down.swap(false, Ordering::Relaxed) {
+            info!("🧹 [SESSION CLEANUP] Tự động nhả nút chuột 5 (Forward)");
+            Self::post_mouse_event_raw(K_CG_EVENT_OTHER_MOUSE_UP, K_CG_MOUSE_BUTTON_5, x, y);
+        }
     }
 }
 
@@ -593,6 +660,8 @@ impl RdpServerInputHandler for MacInputHandler {
                 let is_left = self.left_down.load(Ordering::Relaxed);
                 let is_right = self.right_down.load(Ordering::Relaxed);
                 let is_middle = self.middle_down.load(Ordering::Relaxed);
+                let is_b4 = self.button4_down.load(Ordering::Relaxed);
+                let is_b5 = self.button5_down.load(Ordering::Relaxed);
 
                 if is_left {
                     self.post_mouse_event(
@@ -612,6 +681,20 @@ impl RdpServerInputHandler for MacInputHandler {
                     self.post_mouse_event(
                         K_CG_EVENT_OTHER_MOUSE_DRAGGED,
                         K_CG_MOUSE_BUTTON_CENTER,
+                        mac_x,
+                        mac_y,
+                    );
+                } else if is_b4 {
+                    self.post_mouse_event(
+                        K_CG_EVENT_OTHER_MOUSE_DRAGGED,
+                        K_CG_MOUSE_BUTTON_4,
+                        mac_x,
+                        mac_y,
+                    );
+                } else if is_b5 {
+                    self.post_mouse_event(
+                        K_CG_EVENT_OTHER_MOUSE_DRAGGED,
+                        K_CG_MOUSE_BUTTON_5,
                         mac_x,
                         mac_y,
                     );
@@ -660,12 +743,46 @@ impl RdpServerInputHandler for MacInputHandler {
                 let y = self.current_y.load(Ordering::Relaxed) as f64;
                 self.post_mouse_event(K_CG_EVENT_OTHER_MOUSE_UP, K_CG_MOUSE_BUTTON_CENTER, x, y);
             }
-            MouseEvent::VerticalScroll { value } => {
-                // RDP sends +/- 120 per wheel notch (4 lines per notch for ultra-smooth responsiveness)
-                let lines = (value / 30) as i32;
-                self.post_scroll_event(lines);
+            MouseEvent::Button4Pressed => {
+                self.button4_down.store(true, Ordering::Relaxed);
+                let x = self.current_x.load(Ordering::Relaxed) as f64;
+                let y = self.current_y.load(Ordering::Relaxed) as f64;
+                self.post_mouse_event(K_CG_EVENT_OTHER_MOUSE_DOWN, K_CG_MOUSE_BUTTON_4, x, y);
             }
-            _ => {}
+            MouseEvent::Button4Released => {
+                self.button4_down.store(false, Ordering::Relaxed);
+                let x = self.current_x.load(Ordering::Relaxed) as f64;
+                let y = self.current_y.load(Ordering::Relaxed) as f64;
+                self.post_mouse_event(K_CG_EVENT_OTHER_MOUSE_UP, K_CG_MOUSE_BUTTON_4, x, y);
+            }
+            MouseEvent::Button5Pressed => {
+                self.button5_down.store(true, Ordering::Relaxed);
+                let x = self.current_x.load(Ordering::Relaxed) as f64;
+                let y = self.current_y.load(Ordering::Relaxed) as f64;
+                self.post_mouse_event(K_CG_EVENT_OTHER_MOUSE_DOWN, K_CG_MOUSE_BUTTON_5, x, y);
+            }
+            MouseEvent::Button5Released => {
+                self.button5_down.store(false, Ordering::Relaxed);
+                let x = self.current_x.load(Ordering::Relaxed) as f64;
+                let y = self.current_y.load(Ordering::Relaxed) as f64;
+                self.post_mouse_event(K_CG_EVENT_OTHER_MOUSE_UP, K_CG_MOUSE_BUTTON_5, x, y);
+            }
+            MouseEvent::VerticalScroll { value } => {
+                self.scroll_accum(value as f64, 0.0);
+            }
+            MouseEvent::HorizontalScroll { value } => {
+                self.scroll_accum(0.0, -(value as f64));
+            }
+            MouseEvent::Scroll { x, y } => {
+                self.scroll_accum(y as f64, -(x as f64));
+            }
+            MouseEvent::RelMove { x, y } => {
+                let cur_x = self.current_x.load(Ordering::Relaxed) as f64 + (x as f64 * self.scale_x);
+                let cur_y = self.current_y.load(Ordering::Relaxed) as f64 + (y as f64 * self.scale_y);
+                self.current_x.store(cur_x as i32, Ordering::Relaxed);
+                self.current_y.store(cur_y as i32, Ordering::Relaxed);
+                self.post_mouse_event(K_CG_EVENT_MOUSE_MOVED, K_CG_MOUSE_BUTTON_LEFT, cur_x, cur_y);
+            }
         }
     }
 }

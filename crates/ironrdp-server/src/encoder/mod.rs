@@ -560,7 +560,9 @@ impl EncoderIter<'_> {
                         let mut current_batch_len = 0;
 
                         for tile in encoded_tiles {
-                            if !current_batch.is_empty() && (current_batch_len + tile.len() > 14_000) {
+                            if !current_batch.is_empty()
+                                && (current_batch_len + tile.len() > 14_000)
+                            {
                                 let mut final_buf = vec![0u8; current_batch_len + 16];
                                 let mut cursor = WriteCursor::new(&mut final_buf);
                                 if let Err(e) = BitmapUpdateData::encode_header(

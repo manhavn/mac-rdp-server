@@ -37,6 +37,7 @@ pub enum MouseEvent {
     Button5Pressed,
     Button5Released,
     VerticalScroll { value: i16 },
+    HorizontalScroll { value: i16 },
     Scroll { x: i32, y: i32 },
     RelMove { x: i32, y: i32 },
 }
@@ -170,6 +171,16 @@ impl From<MousePdu> for MouseEvent {
             MouseEvent::VerticalScroll {
                 value: value.number_of_wheel_rotation_units,
             }
+        } else if value.flags.contains(PointerFlags::HORIZONTAL_WHEEL) {
+            MouseEvent::HorizontalScroll {
+                value: value.number_of_wheel_rotation_units,
+            }
+        } else if value.flags.contains(PointerFlags::MIDDLE_BUTTON_OR_WHEEL) {
+            if value.flags.contains(PointerFlags::DOWN) {
+                MouseEvent::MiddlePressed
+            } else {
+                MouseEvent::MiddleReleased
+            }
         } else {
             MouseEvent::Move {
                 x: value.x_position,
@@ -183,15 +194,15 @@ impl From<MouseXPdu> for MouseEvent {
     fn from(value: MouseXPdu) -> Self {
         if value.flags.contains(PointerXFlags::BUTTON1) {
             if value.flags.contains(PointerXFlags::DOWN) {
-                MouseEvent::LeftPressed
+                MouseEvent::Button4Pressed
             } else {
-                MouseEvent::LeftReleased
+                MouseEvent::Button4Released
             }
         } else if value.flags.contains(PointerXFlags::BUTTON2) {
             if value.flags.contains(PointerXFlags::DOWN) {
-                MouseEvent::RightPressed
+                MouseEvent::Button5Pressed
             } else {
-                MouseEvent::RightReleased
+                MouseEvent::Button5Released
             }
         } else {
             MouseEvent::Move {
@@ -286,3 +297,68 @@ impl From<ainput::MousePdu> for MouseEvent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mouse_pdu_conversions() {
+        let pdu_vert = MousePdu {
+            flags: PointerFlags::VERTICAL_WHEEL,
+            number_of_wheel_rotation_units: 120,
+            x_position: 0,
+            y_position: 0,
+        };
+        match MouseEvent::from(pdu_vert) {
+            MouseEvent::VerticalScroll { value } => assert_eq!(value, 120),
+            other => panic!("Expected VerticalScroll, got {:?}", other),
+        }
+
+        let pdu_horiz = MousePdu {
+            flags: PointerFlags::HORIZONTAL_WHEEL,
+            number_of_wheel_rotation_units: -120,
+            x_position: 0,
+            y_position: 0,
+        };
+        match MouseEvent::from(pdu_horiz) {
+            MouseEvent::HorizontalScroll { value } => assert_eq!(value, -120),
+            other => panic!("Expected HorizontalScroll, got {:?}", other),
+        }
+
+        let pdu_middle_down = MousePdu {
+            flags: PointerFlags::MIDDLE_BUTTON_OR_WHEEL | PointerFlags::DOWN,
+            number_of_wheel_rotation_units: 0,
+            x_position: 10,
+            y_position: 20,
+        };
+        match MouseEvent::from(pdu_middle_down) {
+            MouseEvent::MiddlePressed => {}
+            other => panic!("Expected MiddlePressed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_mouse_x_pdu_conversions() {
+        let x_b1_down = MouseXPdu {
+            flags: PointerXFlags::BUTTON1 | PointerXFlags::DOWN,
+            x_position: 0,
+            y_position: 0,
+        };
+        match MouseEvent::from(x_b1_down) {
+            MouseEvent::Button4Pressed => {}
+            other => panic!("Expected Button4Pressed, got {:?}", other),
+        }
+
+        let x_b2_down = MouseXPdu {
+            flags: PointerXFlags::BUTTON2 | PointerXFlags::DOWN,
+            x_position: 0,
+            y_position: 0,
+        };
+        match MouseEvent::from(x_b2_down) {
+            MouseEvent::Button5Pressed => {}
+            other => panic!("Expected Button5Pressed, got {:?}", other),
+        }
+    }
+}
+
