@@ -25,23 +25,69 @@ Dự án **Mac RDP Server** hiệu năng cao được viết bằng ngôn ngữ 
 
 ---
 
-## 🛠️ Hướng dẫn cài đặt & Khởi chạy
+## 📦 Cài đặt & Thiết lập
 
-### 1. Yêu cầu hệ thống:
-- **Hệ điều hành:** macOS 12 Monterey trở lên (hỗ trợ đầy đủ Apple Silicon M-series & Intel x86_64).
-- **Rust Toolchain:** `rustup` và `cargo` phiên bản mới nhất.
+### 1. Cài đặt nhanh qua [mise](https://mise.jdx.dev/) (Khuyên dùng)
 
-### 2. Cấp quyền truy cập macOS (Bắt buộc trong lần chạy đầu):
+Cài đặt bản precompiled binary tự động từ GitHub Releases thông qua `mise` (tự động nhận diện Apple Silicon M1-M4 & Intel x86_64):
+
+```bash
+# Cài đặt toàn cục (Global)
+mise use -g github:manhavn/mac-rdp-server
+
+# Hoặc cài cho thư mục / dự án hiện tại
+mise use github:manhavn/mac-rdp-server
+
+# Hoặc chạy trực tiếp tức thì không cần cài đặt
+mise x github:manhavn/mac-rdp-server -- mac-rdp-server -u dev -p 12345678 -d
+```
+
+Hoặc thêm vào file cấu hình `mise.toml`:
+
+```toml
+[tools]
+"github:manhavn/mac-rdp-server" = "latest"
+```
+
+### 2. Cài đặt qua Cargo
+
+```bash
+# Cài trực tiếp từ GitHub repository
+cargo install --git https://github.com/manhavn/mac-rdp-server.git
+
+# Hoặc cài qua mise với backend cargo
+mise use -g cargo:manhavn/mac-rdp-server
+```
+
+### 3. Tự biên dịch từ mã nguồn (Build from Source)
+
+```bash
+git clone https://github.com/manhavn/mac-rdp-server.git
+cd mac-rdp-server
+./build.sh
+```
+
+---
+
+## 🖥️ Tương thích Phần cứng & Hệ điều hành macOS
+
+| Kiến trúc phần cứng / Chip | Target Triple | Tình trạng hỗ trợ | Ghi chú |
+| :--- | :--- | :--- | :--- |
+| **Apple Silicon (M1, M2, M3, M4 / Pro / Max / Ultra)** | `aarch64-apple-darwin` | ✅ Native (60 FPS) | Tối ưu CoreGraphics chụp màn hình siêu tốc ($< 2\text{ms}$) |
+| **Intel Mac (Core i3/i5/i7/i9, Xeon)** | `x86_64-apple-darwin` | ✅ Native | Tương thích toàn bộ máy Mac dùng CPU Intel |
+| **Universal 2 Binary (Mọi máy Mac)** | `universal-apple-darwin` | ✅ Native Multi-arch | Binary kép chạy native trên cả chip M-series và Intel |
+| **Các phiên bản macOS hỗ trợ** | macOS 11 Big Sur, macOS 12 Monterey, macOS 13 Ventura, macOS 14 Sonoma, macOS 15 Sequoia+ | ✅ Hỗ trợ đầy đủ | Biên dịch với `MACOSX_DEPLOYMENT_TARGET=11.0` |
+
+---
+
+## 🔐 Cấp quyền truy cập macOS (Bắt buộc trong lần chạy đầu)
+
 1. **Screen Recording (Ghi màn hình):** `System Settings` → `Privacy & Security` → `Screen Recording` → Bật quyền cho Terminal / iTerm / Ứng dụng của bạn.
 2. **Accessibility (Trợ năng):** `System Settings` → `Privacy & Security` → `Accessibility` → Bật quyền để Server có thể gửi sự kiện chuột và phím.
 
-### 3. Build Bản Release:
-```bash
-./build.sh
-```
-*(Tự động chạy `cargo fmt --all` định dạng mã nguồn và biên dịch tối ưu vào `./target/release/mac-rdp-server`).*
+---
 
-### 4. Khởi chạy & Quản lý Server:
+## 🚀 Khởi chạy & Quản lý Server
 
 #### Khởi chạy bằng Tham số Dòng lệnh CLI (Khuyên dùng):
 ```bash

@@ -1,2 +1,4 @@
 /target
+/dist
+.intentionally-empty-file.o
 certs/

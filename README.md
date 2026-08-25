@@ -25,23 +25,69 @@ A high-performance **RDP (Remote Desktop Protocol) Server** written in **Rust** 
 
 ---
 
-## 🛠️ Getting Started
+## 📦 Installation & Setup
 
-### 1. Prerequisites:
-- **macOS:** macOS 12 Monterey or newer (Apple Silicon & Intel x86_64).
-- **Rust Toolchain:** Latest stable `rustup` and `cargo`.
+### 1. Via [mise](https://mise.jdx.dev/) (Recommended)
 
-### 2. macOS Permissions (Required on first launch):
+Install precompiled binaries directly from GitHub Releases using `mise` (auto-detects Apple Silicon M1-M4 & Intel x86_64):
+
+```bash
+# Install globally
+mise use -g github:manhavn/mac-rdp-server
+
+# Or install for current project/directory
+mise use github:manhavn/mac-rdp-server
+
+# Or run directly on the fly without installing
+mise x github:manhavn/mac-rdp-server -- mac-rdp-server -u dev -p 12345678 -d
+```
+
+Or add it to your `mise.toml`:
+
+```toml
+[tools]
+"github:manhavn/mac-rdp-server" = "latest"
+```
+
+### 2. Via Cargo
+
+```bash
+# Install directly from GitHub
+cargo install --git https://github.com/manhavn/mac-rdp-server.git
+
+# Or via mise using the cargo backend
+mise use -g cargo:manhavn/mac-rdp-server
+```
+
+### 3. Build from Source
+
+```bash
+git clone https://github.com/manhavn/mac-rdp-server.git
+cd mac-rdp-server
+./build.sh
+```
+
+---
+
+## 🖥️ Hardware & macOS Compatibility
+
+| Architecture / Hardware | Target Triple | Support Status | Notes |
+| :--- | :--- | :--- | :--- |
+| **Apple Silicon (M1, M2, M3, M4 / Pro / Max / Ultra)** | `aarch64-apple-darwin` | ✅ Native (60 FPS) | Ultra-fast CoreGraphics capture ($< 2\text{ms}$) |
+| **Intel Mac (Core i3/i5/i7/i9, Xeon)** | `x86_64-apple-darwin` | ✅ Native | Full hardware compatibility |
+| **Universal 2 Binary (All Macs)** | `universal-apple-darwin` | ✅ Native Multi-arch | Single fat binary containing both arm64 & x86_64 |
+| **Supported OS Versions** | macOS 11 Big Sur, macOS 12 Monterey, macOS 13 Ventura, macOS 14 Sonoma, macOS 15 Sequoia+ | ✅ Full Support | Built with `MACOSX_DEPLOYMENT_TARGET=11.0` |
+
+---
+
+## 🔐 macOS Permissions (Required on First Launch)
+
 1. **Screen Recording:** Go to `System Settings` → `Privacy & Security` → `Screen Recording` → Enable permission for your Terminal or App.
 2. **Accessibility:** Go to `System Settings` → `Privacy & Security` → `Accessibility` → Enable permission for keyboard & mouse input injection.
 
-### 3. Build Release Binary:
-```bash
-./build.sh
-```
-*(Runs `cargo fmt --all` then builds `./target/release/mac-rdp-server`).*
+---
 
-### 4. Launching & Managing the Server:
+## 🚀 Launching & Managing the Server
 
 #### Start with CLI Flags (Recommended):
 ```bash

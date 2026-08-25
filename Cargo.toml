@@ -1,8 +1,16 @@
 [package]
 name = "mac-rdp-server"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 default-run = "mac-rdp-server"
+description = "High-performance native RDP server for macOS (Apple Silicon & Intel)"
+authors = ["Bui Van Manh"]
+repository = "https://github.com/manhavn/mac-rdp-server"
+homepage = "https://github.com/manhavn/mac-rdp-server"
+license = "MIT"
+readme = "README.md"
+keywords = ["rdp", "remote-desktop", "macos", "apple-silicon", "server"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -17,8 +25,6 @@ rcgen = { version = "0.14.9", features = ["pem", "x509-parser"] }
 tokio = { version = "1.53.1", features = ["full", "macros"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-xcap = "0.9.8"
-
 ironrdp-connector = "0.10.0"
 ironrdp-async = "0.10.0"
 ironrdp-tokio = "0.10.0"
@@ -30,8 +36,6 @@ tokio-rustls = "0.26.4"
 ironrdp-server = { path = "./crates/ironrdp-server" }
 
 [workspace]
+resolver = "2"
 members = [".", "crates/ironrdp-server"]
-
-
-
 
